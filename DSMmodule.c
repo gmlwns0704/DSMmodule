@@ -359,7 +359,7 @@ static int dsm_connect(const char* ip, int port){
     // kernel_recvmsg(peer_sock, &msg, &iv, 1, /*크기*/, /*flags*/);
     printk("start recv msg\n");
     while(1){
-        kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(struct DSMpg_info), peer_sock->file->f_flags);
+        kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(struct DSMpg_info), 0);
         printk("recved (id:%d, sz:%d)", node->id, node->sz);
         /*loop 종료 조건*/
         node = insert(node_buf.id, node_buf.sz);
