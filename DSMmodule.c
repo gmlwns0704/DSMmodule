@@ -255,7 +255,7 @@ static int dsm_srv(int port){
 	struct msghdr msg;
     struct kvec iv;
     struct DSMpg_info* node;
-    int ret;
+    int ret, nodnum_buf;
 
 	/* Check the SOCK_* constants for consistency.  */
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
@@ -302,9 +302,10 @@ static int dsm_srv(int port){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
-    printk("set iv to nodnum %p %ld, valus: %d\n", &nodnum, sizeof(nodnum), nodnum);
-    iv.iov_base = &nodnum;
-    iv.iov_len = sizeof(nodnum);
+    printk("set iv to nodnum %p %ld, value: %d\n", &nodnum, sizeof(nodnum), nodnum);
+    nodnum_buf = nodnum;
+    iv.iov_base = &nodnum_buf;
+    iv.iov_len = sizeof(nodnum_buf);
 
     kernel_sendmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum));
 
@@ -330,7 +331,7 @@ static int dsm_connect(const char* ip, int port){
     struct DSMpg_info* node;
     unsigned char ip_bytes[4];
     char buf[32];
-    int ret, i;
+    int ret, i, nodnum_buf;
 
     /* Check the SOCK_* constants for consistency.  */
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
@@ -364,8 +365,9 @@ static int dsm_connect(const char* ip, int port){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
-    iv.iov_base = &nodnum;
-    iv.iov_len = sizeof(nodnum);
+    nodnum_buf = nodnum;
+    iv.iov_base = &nodnum_buf;
+    iv.iov_len = sizeof(nodnum_buf);
     kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum), 0);
 
     iv.iov_base = &node_buf;
