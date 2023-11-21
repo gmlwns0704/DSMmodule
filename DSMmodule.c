@@ -306,7 +306,7 @@ static int dsm_srv(int port){
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
 
-    printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, sizeof(nodnum));
+    printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, &iv, sizeof(nodnum));
     kernel_sendmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum));
 
     printk("dsm_srv start send nodes\n");
