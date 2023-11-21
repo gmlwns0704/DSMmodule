@@ -342,8 +342,8 @@ static int dsm_connect(const char* ip, int port){
     peer_addr.sin_addr.s_addr = htonl(*((unsigned int*)ip_bytes));
     peer_addr.sin_port = htons(port);
 
-    printk("try connect\n");
-    ret = peer_sock->ops->connect(peer_sock, (struct sockaddr*)&peer_addr, sizeof(struct sockaddr), peer_sock->file->f_flags);
+    printk("try connect(%p, %p, %ld, 0)\n", peer_sock, &peer_addr, sizeof(struct sockaddr));
+    ret = peer_sock->ops->connect(peer_sock, (struct sockaddr*)&peer_addr, sizeof(struct sockaddr), 0);
     if(ret){
         printk("connect failed\n");
         return ret;
