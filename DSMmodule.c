@@ -73,8 +73,9 @@ static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
 char* dsm_ip_addr;
 int dsm_port;
-//페이지 정보 링크드 리스트 헤드
+//페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
+static int nodnum;
 
 //arguments
 //charp: char*
@@ -117,6 +118,8 @@ static struct DSMpg_info* insert(int input_id, unsigned int input_sz){
         kvfree(new);
         new = NULL;
     }
+    if(new)
+        nodnum++;
     return new;
 }
 
@@ -126,6 +129,7 @@ static int remove(int input_id){
         return -1;
     if(head->id == input_id){
         kvfree(head);
+        nodnum--;
         return 0;
     }
     
@@ -136,6 +140,7 @@ static int remove(int input_id){
         return -1;
 
     kvfree(node->next);
+    nodnum--;
     return 0;
 }
 
@@ -297,6 +302,11 @@ static int dsm_srv(int port){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
+    iv.iov_base = &nodnum;
+    iv.iov_len = sizeof(nodnum);
+
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum));
+
     printk("dsm_srv start send nodes\n");
     node = head;
     while(node){
@@ -319,7 +329,7 @@ static int dsm_connect(const char* ip, int port){
     struct DSMpg_info* node;
     unsigned char ip_bytes[4];
     char buf[32];
-    int ret;
+    int ret, i;
 
     /* Check the SOCK_* constants for consistency.  */
 	BUILD_BUG_ON(SOCK_CLOEXEC != O_CLOEXEC);
@@ -353,12 +363,16 @@ static int dsm_connect(const char* ip, int port){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
+    iv.iov_base = &nodnum;
+    iv.iov_len = sizeof(nodnum);
+    kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum), 0);
+
     iv.iov_base = &node_buf;
     iv.iov_len = sizeof(node_buf);
 
     // kernel_recvmsg(peer_sock, &msg, &iv, 1, /*크기*/, /*flags*/);
-    printk("start recv msg\n");
-    while(1){
+    printk("start recv %d msg\n", nodnum);
+    for(i = 0; i < nodnum; i++){
         kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(struct DSMpg_info), 0);
         printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
         /*loop 종료 조건*/
