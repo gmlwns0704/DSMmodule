@@ -360,7 +360,7 @@ static int dsm_connect(const char* ip, int port){
     printk("start recv msg\n");
     while(1){
         kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(struct DSMpg_info), 0);
-        printk("recved (id:%d, sz:%d)", node->id, node->sz);
+        printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
         /*loop 종료 조건*/
         node = insert(node_buf.id, node_buf.sz);
         sprintf(buf, "/dev/shm/DSM%d", node_buf.id);
