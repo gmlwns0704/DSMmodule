@@ -75,7 +75,7 @@ char* dsm_ip_addr;
 int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
-static int nodnum;
+static int nodnum = 0;
 
 //arguments
 //charp: char*
@@ -302,6 +302,7 @@ static int dsm_srv(int port){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
+    printk("set iv to nodnum %p %ld, valus: %d\n", &nodnum, sizeof(nodnum), nodnum);
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
 
