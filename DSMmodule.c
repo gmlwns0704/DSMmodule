@@ -306,8 +306,8 @@ static int dsm_srv(int port){
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
 
-    printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, &iv, sizeof(nodnum));
-    kernel_sendmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum));
+    printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, &iv, iv.iov_len);
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
 
     printk("dsm_srv start send nodes\n");
     node = head;
@@ -367,7 +367,7 @@ static int dsm_connect(const char* ip, int port){
 
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
-    kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(nodnum), 0);
+    kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
 
     iv.iov_base = &node_buf;
     iv.iov_len = sizeof(node_buf);
@@ -375,7 +375,7 @@ static int dsm_connect(const char* ip, int port){
     // kernel_recvmsg(peer_sock, &msg, &iv, 1, /*크기*/, /*flags*/);
     printk("start recv %d msg\n", nodnum);
     for(i = 0; i < nodnum; i++){
-        kernel_recvmsg(peer_sock, &msg, &iv, 1, sizeof(struct DSMpg_info), 0);
+        kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
         printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
         /*loop 종료 조건*/
         node = insert(node_buf.id, node_buf.sz);
