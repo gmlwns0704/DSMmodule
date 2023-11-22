@@ -308,7 +308,9 @@ static int dsm_srv(int port){
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
 
+    /*여기서 NULL pointer dereference 발생*/
     printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, &iv, iv.iov_len);
+    printk("&msg->msg_iter: %p\n", msg->msg_iter);
     kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
 
     printk("dsm_srv start send nodes\n");
@@ -317,7 +319,7 @@ static int dsm_srv(int port){
         iv.iov_base = node;
         iv.iov_len = sizeof(*node);
 
-        kernel_sendmsg(peer_sock, &msg, &iv, 1, sizeof(*node));
+        kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
         node = node->next;
     }
 
