@@ -290,6 +290,10 @@ static int dsm_srv(int port){
     }
 
     peer_sock = kvmalloc(sizeof(*peer_sock), GFP_KERNEL);
+    if(IS_ERR(peer_sock)){
+        printk("kvmalloc failed\n");
+        return ret;
+    }
     printk("dsm_srv try accept(%p, %p, 0, true)\n", my_sock, peer_sock);
     ret = my_sock->ops->accept(my_sock, peer_sock, 0, true);
     if(ret){
@@ -297,12 +301,10 @@ static int dsm_srv(int port){
         return ret;
     }
 
-    printk("dsm_srv try memeset msg(%p, 0, %ld)\n", &msg, sizeof(msg));
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(struct sockaddr);
 
-    printk("set iv to nodnum %p %ld, value: %d\n", &nodnum, sizeof(nodnum), nodnum);
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
 
