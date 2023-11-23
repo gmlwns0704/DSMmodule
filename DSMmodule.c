@@ -289,11 +289,13 @@ static int dsm_srv(int port){
         return ret;
     }
 
-    peer_sock = kvmalloc(sizeof(*peer_sock), GFP_KERNEL);
-    if(IS_ERR(peer_sock)){
-        printk("kvmalloc failed\n");
+    printk("dsm_srv try sock_create (peer)\n");
+	ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
+	if (ret){
+        printk("sock_create failed\n");
         return ret;
     }
+
     printk("dsm_srv try accept(%p, %p, 0, true)\n", my_sock, peer_sock);
     ret = my_sock->ops->accept(my_sock, peer_sock, 0, true);
     if(ret){
@@ -303,7 +305,7 @@ static int dsm_srv(int port){
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
-    msg.msg_namelen = sizeof(struct sockaddr);
+    msg.msg_namelen = sizeof(*peer_sock);
 
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
@@ -367,7 +369,7 @@ static int dsm_connect(const char* ip, int port){
     
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
-    msg.msg_namelen = sizeof(struct sockaddr);
+    msg.msg_namelen = sizeof(*peer_sock);
 
     iv.iov_base = &nodnum;
     iv.iov_len = sizeof(nodnum);
