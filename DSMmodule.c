@@ -19,6 +19,8 @@
 //메모리
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/highmem.h>
+#include <linux/pagemap.h>
 
 //소켓
 #include <linux/net.h>
@@ -32,11 +34,20 @@
 
 #define DSM_MAX_PAGE_NUM 32
 
+static enum msg_type{
+    DSM_NEW_PG = 0,
+    DSM_UPDATE_PG,
+    DSM_REMOVE_PG
+};
+
 //모듈 프로그래밍 참고용
 //가이드
 //https://sysprog21.github.io/lkmpg/
 //각종 함수나 구조체를 커널 소스코드에서 찾아줌
 //https://elixir.bootlin.com/linux/latest/source/include/linux/
+//https://stackoverflow.com/questions/10441392/major-page-fault-handler-in-linux-kernel
+//커스텀 mmap설정, 커스텀 fault설정
+//https://pr0gr4m.tistory.com/entry/Linux-Kernel-5-mmap
 
 // 특정 페이지에 대한 각종 정보들, 사용자를 위한 정보도 포함
 struct DSMpg{
@@ -52,13 +63,26 @@ struct DSMpg_info{
     unsigned int sz;
 };
 
+struct msg_header{
+    enum msg_type type;
+    int id;
+};
+
 static struct DSMpg_info* find(int input_id);
 static struct DSMpg_info* insert(int input_id, unsigned int input_sz);
 static int remove(int input_id);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
 static int new_map_file(const char* buf, struct DSMpg_info* node);
-static struct file* new_map_filp(const char* buf, struct DSMpg_info* node, bool is_new);
+static struct file* new_map_filp(const char* buf, struct DSMpg_info* node);
+
+static int dsm_srv(int port);
+static int dsm_connect(const char* ip, int port);
+static void dsm_recv_thread(void);
+static int dsm_msg_new_pg(int id);
+static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
+static int dsm_msg_handle_new_pg(int id);
+static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 
 //모듈 상태
 static bool mod_ready = 0;
@@ -81,6 +105,16 @@ static int nodnum = 0;
 //charp: char*
 module_param(dsm_ip_addr, charp, 0600);
 module_param(dsm_port, int, 0600);
+
+//ioctl로 open될 파일의 operations
+// struct file_operations map_fops = {
+//     .mmap = dsm_mmap
+// };
+
+//dsm_mmap으로 mmap될 vm_area_struct의 operations
+// struct vm_operations_struct dsm_vma_ops = {
+//     .fault = dsm_vma_fault
+// };
 
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* find(int input_id){
@@ -169,7 +203,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         }
     }
 
-    fp = new_map_filp(buf, node, is_new);
+    fp = new_map_filp(buf, node);
     ret = !fp;
     if(ret){
         printk("new_map_file failed\n");
@@ -199,7 +233,7 @@ static int new_map_file(const char* buf, struct DSMpg_info* node){
     return 0;
 }
 
-static struct file* new_map_filp(const char* buf, struct DSMpg_info* node, bool is_new){
+static struct file* new_map_filp(const char* buf, struct DSMpg_info* node){
     struct file* fp;
 
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
@@ -213,6 +247,8 @@ static struct file* new_map_filp(const char* buf, struct DSMpg_info* node, bool 
 }
 
 //커널 기능
+
+//유저 기능 호출
 
 static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
 
@@ -249,6 +285,32 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
     //정상적이면 도달 안함
     return -1;
 }
+
+//va_area_struct 관련
+/*
+static vm_fault_t dsm_vma_fault(struct vm_fault* vmf){
+    //fault 발생시(vm접근시) 발생할 일
+    //물리 메모리에 접근하는 대신 peer_sock으로부터 데이터 받아오기
+    //or peer로부터 페이지 정보를 받고 페이지 할당 후 반영?
+    struct page* page;
+    void* pg_ptr;
+    uint offset;
+
+    page = follow_page(vma, vma->address, FOLL_WRITE|FOLL_FORCE);
+
+    //최종적으로 할당할 page를 리턴해야함
+    return page;
+}
+
+static int dsm_mmap(struct file* file, struct vm_area_struct vma){
+    //파일에 mmap수행시 일어날 일 정의
+    vma->vm_ops = &dsm_vma_ops;
+    //해당 페이지 쓰기불가, 페이지에 write을 시도할 때 마다 page_fault가 발생한다.
+    vma->vm_flags &= ~VM_WRITE;
+    vma->vm_flags |= VM_DENYWRITE;
+}
+*/
+//소켓 통신
 
 static int dsm_srv(int port){
     //원본 커널 소스코드에서 발췌 (/net/socket.c)
@@ -356,7 +418,7 @@ static int dsm_connect(const char* ip, int port){
     peer_addr.sin_family = AF_INET;
     //ip address parsing
     sscanf(ip, "%hhd.%hhd.%hhd.%hhd", &(ip_bytes[3]), &(ip_bytes[2]), &(ip_bytes[1]), &(ip_bytes[0]));
-    printk("parsing %s to %ld\n", dsm_ip_addr, *((unsigned int*)ip_bytes));
+    printk("parsing %s to %u\n", dsm_ip_addr, *((unsigned int*)ip_bytes));
     peer_addr.sin_addr.s_addr = htonl(*((unsigned int*)ip_bytes));
     peer_addr.sin_port = htons(port);
 
@@ -391,6 +453,154 @@ static int dsm_connect(const char* ip, int port){
 
     printk("DSM mod ready\n");
     mod_ready = true;
+    return 0;
+}
+
+//통신 스레드 관련
+
+static void dsm_recv_thread(void){
+    struct msghdr msg;
+    struct kvec iv;
+    struct msg_header header;
+    struct DSMpg_info* dsmpg;
+    void* buf;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    while(1){
+        iv.iov_base = &header;
+        iv.iov_len = sizeof(header);
+        kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
+        switch(header.type){
+            case DSM_NEW_PG:
+                dsm_msg_handle_new_pg(header.id);
+            break;
+            case DSM_UPDATE_PG:
+                dsmpg = find(header.id);
+                if(!dsmpg){
+                    printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
+                    break;
+                }
+                buf = kvmalloc(dsmpg->sz, GFP_KERNEL);
+                if(IS_ERR(buf)){
+                    printk("kvmalloc failed\n");
+                    break;
+                }
+                dsm_msg_handle_update_pg(dsmpg, buf);
+            break;
+        }
+    }
+}
+
+//메시지 send관련
+
+static int dsm_msg_new_pg(int id){
+    struct msghdr msg;
+    struct kvec iv;
+    struct msg_header header;
+    uint offset = 0;
+
+    header.type = DSM_NEW_PG;
+    header.id = id;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    iv.iov_base = &header;
+    iv.iov_len = sizeof(header);
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
+
+    return 0;
+}
+
+static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
+    struct file* fp;
+    char buf[64];
+    void* msg_buf;
+    struct msghdr msg;
+    struct kvec iv;
+    uint offset = 0;
+    
+    msg_buf = kvmalloc(sizeof(DSM_UPDATE_PG)+sizeof(dsmpg->id)+dsmpg->sz, GFP_KERNEL);
+    if(IS_ERR(msg_buf)){
+        printk("kvmalloc failed\n");
+        return -1;
+    }
+    ((struct msg_header*)msg_buf)->type = DSM_UPDATE_PG;
+    ((struct msg_header*)msg_buf)->id = dsmpg->id;
+    offset += sizeof(struct msg_header);
+
+    //업데이트할 파일 열기
+    sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
+    fp = new_map_filp(buf, dsmpg);
+    if(!fp){
+        printk("new_map_filp failed\n");
+        kvfree(msg_buf);
+        return -1;
+    }
+
+    if(kernel_read(fp, msg_buf+offset, dsmpg->sz, &(fp->f_pos)) < 0){
+        printk("kernel_read failed\n");
+        kvfree(msg_buf);
+        return -1;
+    }
+    offset += dsmpg->sz;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    iv.iov_base = msg_buf;
+    iv.iov_len = offset;
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
+
+    kvfree(msg_buf);
+    filp_close(fp, NULL);
+    return 0;
+}
+
+//메시지 recv관련
+
+static int dsm_msg_handle_new_pg(int id){
+    struct DSMpg_info* dsmpg = find(id);
+    char buf[64];
+    sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
+    if(!dsmpg){
+        printk("accepted new_pg but id already exist\n");
+        return -1;
+    }
+    if(new_map_file(buf, dsmpg)){
+        printk("new_map_fd_install failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
+    struct file* fp;
+    struct page* pg;
+    char buf[64];
+
+    //업데이트할 파일 열기
+    sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
+    fp = new_map_filp(data, dsmpg);
+    if(IS_ERR(fp)){
+        printk("new_map_file failed\n");
+        return -1;
+    }
+    pg = find_lock_page(fp->f_mapping, 0);
+    if(!pg){
+        printk("find_lock_page failed\n");
+        return -1;
+    }
+
+    memcpy(kmap(pg), data, dsmpg->sz);
+    kunmap(pg);
+    filp_close(fp, NULL);
     return 0;
 }
 
