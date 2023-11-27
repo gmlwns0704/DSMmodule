@@ -198,27 +198,30 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     node = find(dsmpg->dsmpg_id);
     is_new = !node;
     if(is_new){
+        //링크드 리스트에 삽입
         node = insert(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
         ret = !node;
         if(ret){
-            printk("insert failed\n");
+            printk("insert failed %d\n", ret);
             return ret;
         }
-
+        //새로운 파일 생성
         ret = new_map_file(buf, node);
         if(ret){
-            printk("new_map_file failed]n");
+            printk("new_map_file failed %d\n", ret);
             return ret;
         }
     }
 
+    //해당 파일포인터 얻기
     fp = new_map_filp(buf, node);
     ret = !fp;
     if(ret){
-        printk("new_map_file failed\n");
+        printk("new_map_file failed %d\n", ret);
         return ret;
     }
 
+    //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
     fd_install(dsmpg->dsmpg_fd, fp);
 
@@ -229,13 +232,13 @@ static int new_map_file(const char* buf, struct DSMpg_info* node){
     int ret;
     ret = kern_path(buf, LOOKUP_DOWN, &(node->path));
     if(ret){
-        printk("kern_path failed\n");
+        printk("kern_path failed %d\n", ret);
         return ret;
     }
     
     ret = vfs_truncate(&(node->path), node->sz);
     if(ret){
-        printk("vfs_truncate failed\n");
+        printk("vfs_truncate failed %d\n", ret);
         return ret;
     }
 
@@ -271,7 +274,7 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
     // printk("copy from user %p to kernel %p\n", (struct DSMpg*)arg, &dsmpg);
     ret = copy_from_user(&dsmpg, (struct DSMpg*)arg, sizeof(struct DSMpg));
     if(ret){
-        printk("copy_from_user failed\n");
+        printk("copy_from_user failed %d\n", ret);
         return ret;
     }
 
@@ -281,13 +284,13 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
         case DSM_IOCTL_GETFD:
             ret = new_map_fd_install(&dsmpg);
             if(ret){
-                printk("new_map failed\n");
+                printk("DSM_IOCTL_GETFD failed %d\n", ret);
                 return ret;
             }
             //수정된 arg를 다시 유저 메모리에 입력
             ret = copy_to_user((struct DSMpg*)arg, &dsmpg, sizeof(struct DSMpg));
             if(ret){
-                printk("copy_to_user failed\n");
+                printk("copy_to_user failed %d\n", ret);
                 return ret;
             }
         break;
@@ -299,7 +302,7 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
             }
             ret = dsm_msg_update_pg(node);
             if(ret){
-                printk("dsm_msg_update_msg failed\n");
+                printk("dsm_msg_update_msg failed %d\n", ret);
                 return ret;
             }
         break;
@@ -350,7 +353,7 @@ static int dsm_srv(int port){
     printk("dsm_srv try sock_create\n");
 	ret = sock_create(AF_INET, SOCK_STREAM, 0, &my_sock);
 	if (ret){
-        printk("sock_create failed\n");
+        printk("sock_create failed %d\n", ret);
         return ret;
     }
     
@@ -362,28 +365,28 @@ static int dsm_srv(int port){
     printk("dsm_srv try bind\n");
     ret = my_sock->ops->bind(my_sock, (struct sockaddr*)&my_addr, sizeof(my_addr));
     if(ret){
-        printk("bind failed\n");
+        printk("bind failed %d\n", ret);
         return ret;
     }
 
     printk("dsm_srv try listen\n");
     ret = my_sock->ops->listen(my_sock, 5);
     if(ret){
-        printk("listen failed\n");
+        printk("listen failed %d\n", ret);
         return ret;
     }
 
     printk("dsm_srv try sock_create (peer)\n");
 	ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
 	if (ret){
-        printk("sock_create failed\n");
+        printk("sock_create failed %d\n", ret);
         return ret;
     }
 
     printk("dsm_srv try accept(%p, %p, 0, true)\n", my_sock, peer_sock);
     ret = my_sock->ops->accept(my_sock, peer_sock, 0, true);
     if(ret){
-        printk("accept failed\n");
+        printk("accept failed %d\n", ret);
         return ret;
     }
 
@@ -432,7 +435,7 @@ static int dsm_connect(const char* ip, int port){
     printk("try sock_create\n");
     ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
 	if (ret){
-        printk("sock_create failed\n");
+        printk("sock_create failed %d\n", ret);
         return ret;
     }
 
@@ -447,7 +450,7 @@ static int dsm_connect(const char* ip, int port){
     printk("try connect(%p, %p, %ld, 0)\n", peer_sock, &peer_addr, sizeof(struct sockaddr));
     ret = peer_sock->ops->connect(peer_sock, (struct sockaddr*)&peer_addr, sizeof(struct sockaddr), 0);
     if(ret){
-        printk("connect failed\n");
+        printk("connect failed %d\n", ret);
         return ret;
     }
     
