@@ -26,18 +26,22 @@
 #include <linux/net.h>
 #include <linux/in.h>
 
+//스레드
+#include <linux/kthread.h>
+
 
 #define DEV_NAME "DSMmodule"
 #define DSM_TMP_DIR "/tmp/DSM"
 #define DSM_IOCTL_GETFD 0
-#define DSM_IOCTL_GETMETA 1
+#define DSM_IOCTL_FORCE_UPDATE 1
 
 #define DSM_MAX_PAGE_NUM 32
 
 static enum msg_type{
     DSM_NEW_PG = 0,
     DSM_UPDATE_PG,
-    DSM_REMOVE_PG
+    DSM_REMOVE_PG,
+    DSM_REQUEST_PG
 };
 
 //모듈 프로그래밍 참고용
@@ -78,11 +82,15 @@ static struct file* new_map_filp(const char* buf, struct DSMpg_info* node);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
-static void dsm_recv_thread(void);
+static int dsm_recv_thread(void* arg);
+
 static int dsm_msg_new_pg(int id);
 static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
+static int dsm_msg_request_pg(int id);
+
 static int dsm_msg_handle_new_pg(int id);
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
+static int dsm_msg_handle_request_pg(int id);
 
 //모듈 상태
 static bool mod_ready = 0;
@@ -95,6 +103,7 @@ static struct sockaddr_in my_addr;
 static struct sockaddr_in peer_addr;
 static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
+static struct task_struct* recv_thread = NULL;
 char* dsm_ip_addr;
 int dsm_port;
 //페이지 정보 링크드 리스트
@@ -256,34 +265,47 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
     // struct file* pgfp;
     // struct path path;
     struct DSMpg dsmpg;
+    struct DSMpg_info* node;
 
     //유저의 arg로부터 입력값을 커널 메모리로 가져옴
-    printk("copy from user %p to kernel %p\n", (struct DSMpg*)arg, &dsmpg);
+    // printk("copy from user %p to kernel %p\n", (struct DSMpg*)arg, &dsmpg);
     ret = copy_from_user(&dsmpg, (struct DSMpg*)arg, sizeof(struct DSMpg));
     if(ret){
         printk("copy_from_user failed\n");
         return ret;
     }
 
-    printk("ioctl cmd: %d\ndsmpg: id:%d fd:%d sz:%d\n", cmd, dsmpg.dsmpg_id, dsmpg.dsmpg_fd, dsmpg.dsmpg_sz);
+    // printk("ioctl cmd: %d\ndsmpg: id:%d fd:%d sz:%d\n", cmd, dsmpg.dsmpg_id, dsmpg.dsmpg_fd, dsmpg.dsmpg_sz);
 
     switch(cmd){
         case DSM_IOCTL_GETFD:
-        ret = new_map_fd_install(&dsmpg);
-        if(ret){
-            printk("new_map failed\n");
-            return ret;
-        }
-        //수정된 arg를 다시 유저 메모리에 입력
-        ret = copy_to_user((struct DSMpg*)arg, &dsmpg, sizeof(struct DSMpg));
-        if(ret){
-            printk("copy_to_user failed\n");
-            return ret;
-        }
+            ret = new_map_fd_install(&dsmpg);
+            if(ret){
+                printk("new_map failed\n");
+                return ret;
+            }
+            //수정된 arg를 다시 유저 메모리에 입력
+            ret = copy_to_user((struct DSMpg*)arg, &dsmpg, sizeof(struct DSMpg));
+            if(ret){
+                printk("copy_to_user failed\n");
+                return ret;
+            }
+        break;
+        case DSM_IOCTL_FORCE_UPDATE:
+            ret = node = find(dsmpg.dsmpg_id);
+            if(!ret){
+                printk("DSM_IOCTL_FORCE_UPDATE to non exist id %d\n");
+                return -1;
+            }
+            ret = dsm_msg_update_pg(node);
+            if(ret){
+                printk("dsm_msg_update_msg failed\n");
+                return ret;
+            }
+        break;
     }
 
-    //정상적이면 도달 안함
-    return -1;
+    return 0;
 }
 
 //va_area_struct 관련
@@ -458,7 +480,7 @@ static int dsm_connect(const char* ip, int port){
 
 //통신 스레드 관련
 
-static void dsm_recv_thread(void){
+static int dsm_recv_thread(void* arg){
     struct msghdr msg;
     struct kvec iv;
     struct msg_header header;
@@ -490,8 +512,17 @@ static void dsm_recv_thread(void){
                 }
                 dsm_msg_handle_update_pg(dsmpg, buf);
             break;
+            case DSM_REQUEST_PG:
+                if(!find(header.id)){
+                    printk("DSM_REQUSET_PG to non exist id %d, ignored\n", header.id);
+                    break;   
+                }
+                dsm_msg_handle_request_pg(header.id);
+            break;
         }
     }
+
+    return -1;
 }
 
 //메시지 send관련
@@ -562,6 +593,25 @@ static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
     return 0;
 }
 
+static int dsm_msg_request_pg(int id){
+    struct msghdr msg;
+    struct kvec iv;
+    struct msg_header header;
+    uint offset = 0;
+
+    header.type = DSM_REQUEST_PG;
+    header.id = id;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    iv.iov_base = &header;
+    iv.iov_len = sizeof(header);
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
+    return 0;
+}
+
 //메시지 recv관련
 
 static int dsm_msg_handle_new_pg(int id){
@@ -602,6 +652,11 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
     kunmap(pg);
     filp_close(fp, NULL);
     return 0;
+}
+
+static int dsm_msg_handle_request_pg(int id){
+    struct DSMpg_info* dsmpg = find(id);
+    return dsm_msg_update_pg(dsmpg);
 }
 
 struct file_operations fops = {
@@ -665,6 +720,14 @@ static int __init dsm_init(void)
 
     printk("DSM init socket done\n");
 
+    printk("DSM init recv_thread\n");
+    err = recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
+    if(IS_ERR(recv_thread)){
+        printk("kthread_tun failed\n");
+        goto failed;
+    }
+    printk("DSM init recv_thread done\n");
+
     printk("DSM init done\n");
 
     return 0;
@@ -687,6 +750,7 @@ static void __exit dsm_exit(void)
     class_destroy(dv_class);
     cdev_del(&dv_cdv);
     unregister_chrdev_region(dv_dv, 1);
+    kthread_stop(recv_thread);
     printk("DSM exit!\n");
 }
 
