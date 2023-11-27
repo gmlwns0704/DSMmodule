@@ -205,12 +205,12 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
             printk("insert failed %d\n", ret);
             return ret;
         }
-        //새로운 파일 생성
-        ret = new_map_file(buf, node);
-        if(ret){
-            printk("new_map_file failed %d\n", ret);
-            return ret;
-        }
+        // //새로운 파일 생성
+        // ret = new_map_file(buf, node);
+        // if(ret){
+        //     printk("new_map_file failed %d\n", ret);
+        //     return ret;
+        // }
     }
 
     //해당 파일포인터 얻기
@@ -219,6 +219,14 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     if(ret){
         printk("new_map_file failed %d\n", ret);
         return ret;
+    }
+
+    if(is_new){
+        ret = vfs_truncate(&fp->f_path, 4096);
+        if(ret){
+            printk("vfs_truncate failed %d\n", ret);
+            return ret;
+        }
     }
 
     //유저에게 fd설정
