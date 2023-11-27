@@ -62,7 +62,6 @@ struct DSMpg{
 };
 
 struct DSMpg_info{
-    struct path path;
     struct DSMpg_info* next;
     int id;
     unsigned int sz;
@@ -510,7 +509,7 @@ static int dsm_recv_thread(void* arg){
         switch(header.type){
             case DSM_NEW_PG:
                 if(find(header.id)){
-                    printk("DSM_NEW_PG to exist id %d, ignored\n", header.id);
+                    printk("DSM_NEW_PG to exist id %d (find returned %p), ignored\n", header.id, find(header.id));
                     break;   
                 }
                 if(!dsm_msg_handle_new_pg(header.id, header.sz)){
