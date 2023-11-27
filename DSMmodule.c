@@ -34,6 +34,7 @@
 #define DSM_TMP_DIR "/tmp/DSM"
 #define DSM_IOCTL_GETFD 0
 #define DSM_IOCTL_FORCE_UPDATE 1
+#define DSM_IOCTL_GET_UPDATE 2
 
 #define DSM_MAX_PAGE_NUM 32
 
@@ -78,8 +79,7 @@ static struct DSMpg_info* insert(int input_id, unsigned int input_sz);
 static int remove(int input_id);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
-static int new_map_file(const char* buf, struct DSMpg_info* node);
-static struct file* new_map_filp(const char* buf, struct DSMpg_info* node);
+static int new_map_file(const char* buf, uint sz);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
@@ -208,24 +208,17 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         }
         //새로운 페이지 생성 알림
         dsm_msg_new_pg(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
-        // //새로운 파일 생성
-        // ret = new_map_file(buf, node);
-        // if(ret){
-        //     printk("new_map_file failed %d\n", ret);
-        //     return ret;
-        // }
     }
 
     //해당 파일포인터 얻기
-    fp = new_map_filp(buf, node);
-    ret = !fp;
-    if(ret){
-        printk("new_map_file failed %d\n", ret);
-        return ret;
+    fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
+    if(IS_ERR(fp)){
+        printk("filp_open failed\n");
+        return -1;
     }
 
     if(is_new){
-        ret = vfs_truncate(&fp->f_path, 4096);
+        ret = vfs_truncate(&fp->f_path, dsmpg->dsmpg_sz);
         if(ret){
             printk("vfs_truncate failed %d\n", ret);
             return ret;
@@ -236,37 +229,26 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
     fd_install(dsmpg->dsmpg_fd, fp);
 
+    //종료
+    filp_close(fp, NULL);
     return 0;
 }
 
-static int new_map_file(const char* buf, struct DSMpg_info* node){
+static int new_map_file(const char* buf, uint sz){
+    struct file* fp;
     int ret;
-    ret = kern_path(buf, LOOKUP_FOLLOW, &(node->path));
-    if(ret){
-        printk("kern_path failed %d\n", ret);
-        return ret;
+    fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
+    if(IS_ERR(fp)){
+        printk("filp_open failed\n");
+        return -1;
     }
-    
-    ret = vfs_truncate(&(node->path), node->sz);
+    ret = vfs_truncate(&fp->f_path, sz);
     if(ret){
         printk("vfs_truncate failed %d\n", ret);
         return ret;
     }
-
+    filp_close(fp, NULL);
     return 0;
-}
-
-static struct file* new_map_filp(const char* buf, struct DSMpg_info* node){
-    struct file* fp;
-
-    fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
-
-    if(IS_ERR(fp)){
-        printk("open failed\n");
-        return NULL;
-    }
-
-    return fp;
 }
 
 //커널 기능
@@ -306,16 +288,31 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
             }
         break;
         case DSM_IOCTL_FORCE_UPDATE:
-            ret = node = find(dsmpg.dsmpg_id);
-            if(!ret){
-                printk("DSM_IOCTL_FORCE_UPDATE to non exist id %d\n");
+            node = find(dsmpg.dsmpg_id);
+            if(!node){
+                printk("DSM_IOCTL_FORCE_UPDATE to non exist id %d\n", dsmpg.dsmpg_id);
                 return -1;
             }
             ret = dsm_msg_update_pg(node);
             if(ret){
-                printk("dsm_msg_update_msg failed %d\n", ret);
+                printk("dsm_msg_update_pg failed %d\n", ret);
                 return ret;
             }
+        break;
+        case DSM_IOCTL_GET_UPDATE:
+            node = find(dsmpg.dsmpg_id);
+            if(!node){
+                printk("DSM_IOCTL_GET_UPDATE to non exist id %d\n", dsmpg.dsmpg_id);
+                return -1;
+            }
+            ret = dsm_msg_request_pg(dsmpg.dsmpg_id);
+            if(ret){
+                printk("dsm_msg_request_pg failed %d\n", ret);
+                return ret;
+            }
+            /*
+            실제 업데이트 완료를 대기하는 코드?
+            */
         break;
     }
 
@@ -484,7 +481,7 @@ static int dsm_connect(const char* ip, int port){
         /*loop 종료 조건*/
         node = insert(node_buf.id, node_buf.sz);
         sprintf(buf, "/dev/shm/DSM%d", node_buf.id);
-        new_map_file(buf, node);
+        new_map_file(buf, node_buf.sz);
     }
 
     printk("DSM mod ready\n");
@@ -527,13 +524,13 @@ static int dsm_recv_thread(void* arg){
                     printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
                     break;
                 }
-                buf = kvmalloc(dsmpg->sz, GFP_KERNEL);
+                buf = kvmalloc(header.sz, GFP_KERNEL);
                 if(IS_ERR(buf)){
                     printk("kvmalloc failed\n");
                     break;
                 }
                 iv.iov_base = buf;
-                iv.iov_len = dsmpg->sz;
+                iv.iov_len = header.sz;
                 kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
                 dsm_msg_handle_update_pg(dsmpg, buf);
                 kvfree(buf);
@@ -544,6 +541,11 @@ static int dsm_recv_thread(void* arg){
                     break;   
                 }
                 dsm_msg_handle_request_pg(header.id);
+            break;
+            case DSM_REMOVE_PG:
+            break;
+            default:
+            printk("unknown msg type\n");
             break;
         }
     }
@@ -557,7 +559,6 @@ static int dsm_msg_new_pg(int id, uint sz){
     struct msghdr msg;
     struct kvec iv;
     struct msg_header header;
-    char* buf[32] = {0};
 
     header.type = DSM_NEW_PG;
     header.id = id;
@@ -592,9 +593,9 @@ static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
 
     //업데이트할 파일 열기
     sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
-    fp = new_map_filp(buf, dsmpg);
+    fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(!fp){
-        printk("new_map_filp failed\n");
+        printk("filp_open failed\n");
         kvfree(msg_buf);
         return -1;
     }
@@ -623,7 +624,6 @@ static int dsm_msg_request_pg(int id){
     struct msghdr msg;
     struct kvec iv;
     struct msg_header header;
-    uint offset = 0;
 
     header.type = DSM_REQUEST_PG;
     header.id = id;
@@ -649,8 +649,8 @@ static int dsm_msg_handle_new_pg(int id, uint sz){
     }
     sprintf(buf, "/dev/shm/DSM%d", id);
     dsmpg = insert(id, sz);
-    if(new_map_file(buf, dsmpg)){
-        printk("new_map_fd_install failed\n");
+    if(new_map_file(buf, dsmpg->sz)){
+        printk("new_map_file failed\n");
         return -1;
     }
 
@@ -664,9 +664,9 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
 
     //업데이트할 파일 열기
     sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
-    fp = new_map_filp(data, dsmpg);
+    fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(IS_ERR(fp)){
-        printk("new_map_file failed\n");
+        printk("filp_open failed\n");
         return -1;
     }
     pg = find_lock_page(fp->f_mapping, 0);
@@ -748,8 +748,9 @@ static int __init dsm_init(void)
     printk("DSM init socket done\n");
 
     printk("DSM init recv_thread\n");
-    err = recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
+    recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
     if(IS_ERR(recv_thread)){
+        err = -1;
         printk("kthread_tun failed\n");
         goto failed;
     }
