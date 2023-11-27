@@ -205,6 +205,8 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
             printk("insert failed %d\n", ret);
             return ret;
         }
+        //새로운 페이지 생성 알림
+        dsm_msg_new_pg(dsmpg->dsmpg_id);
         // //새로운 파일 생성
         // ret = new_map_file(buf, node);
         // if(ret){
