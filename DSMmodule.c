@@ -508,9 +508,17 @@ static int dsm_recv_thread(void* arg){
         iv.iov_base = &header;
         iv.iov_len = sizeof(header);
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
+        printk("handle msg id:%d, type:%d\n", header.id, header.type);
         switch(header.type){
             case DSM_NEW_PG:
-                dsm_msg_handle_new_pg(header.id);
+                if(find(header.id)){
+                    printk("DSM_NEW_PG to exist id %d, ignored\n", header.id);
+                    break;   
+                }
+                if(!dsm_msg_handle_new_pg(header.id)){
+                    printk("dsm_msg_handle_new_pg failed, ignored\n");
+                    break;
+                }
             break;
             case DSM_UPDATE_PG:
                 dsmpg = find(header.id);
@@ -524,6 +532,7 @@ static int dsm_recv_thread(void* arg){
                     break;
                 }
                 dsm_msg_handle_update_pg(dsmpg, buf);
+                kvfree(buf);
             break;
             case DSM_REQUEST_PG:
                 if(!find(header.id)){
