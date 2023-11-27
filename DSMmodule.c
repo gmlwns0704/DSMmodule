@@ -68,8 +68,9 @@ struct DSMpg_info{
 };
 
 struct msg_header{
-    enum msg_type type;
-    int id;
+    enum msg_type type; //msg type
+    int id; //pg id
+    uint sz; //pg size
 };
 
 static struct DSMpg_info* find(int input_id);
@@ -84,11 +85,11 @@ static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
 static int dsm_recv_thread(void* arg);
 
-static int dsm_msg_new_pg(int id);
+static int dsm_msg_new_pg(int id, uint sz);
 static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
 static int dsm_msg_request_pg(int id);
 
-static int dsm_msg_handle_new_pg(int id);
+static int dsm_msg_handle_new_pg(int id, uint sz);
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 static int dsm_msg_handle_request_pg(int id);
 
@@ -206,7 +207,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
             return ret;
         }
         //새로운 페이지 생성 알림
-        dsm_msg_new_pg(dsmpg->dsmpg_id);
+        dsm_msg_new_pg(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
         // //새로운 파일 생성
         // ret = new_map_file(buf, node);
         // if(ret){
@@ -515,7 +516,7 @@ static int dsm_recv_thread(void* arg){
                     printk("DSM_NEW_PG to exist id %d, ignored\n", header.id);
                     break;   
                 }
-                if(!dsm_msg_handle_new_pg(header.id)){
+                if(!dsm_msg_handle_new_pg(header.id, header.sz)){
                     printk("dsm_msg_handle_new_pg failed, ignored\n");
                     break;
                 }
@@ -531,6 +532,9 @@ static int dsm_recv_thread(void* arg){
                     printk("kvmalloc failed\n");
                     break;
                 }
+                iv.iov_base = buf;
+                iv.iov_len = dsmpg->sz;
+                kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
                 dsm_msg_handle_update_pg(dsmpg, buf);
                 kvfree(buf);
             break;
@@ -549,11 +553,11 @@ static int dsm_recv_thread(void* arg){
 
 //메시지 send관련
 
-static int dsm_msg_new_pg(int id){
+static int dsm_msg_new_pg(int id, uint sz){
     struct msghdr msg;
     struct kvec iv;
     struct msg_header header;
-    uint offset = 0;
+    char* buf[32] = {0};
 
     header.type = DSM_NEW_PG;
     header.id = id;
@@ -636,14 +640,15 @@ static int dsm_msg_request_pg(int id){
 
 //메시지 recv관련
 
-static int dsm_msg_handle_new_pg(int id){
-    struct DSMpg_info* dsmpg = find(id);
+static int dsm_msg_handle_new_pg(int id, uint sz){
+    struct DSMpg_info* dsmpg;
     char buf[64];
-    sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
-    if(!dsmpg){
-        printk("accepted new_pg but id already exist\n");
+    if(!find(id)){
+        printk("dms_msg_handle_new_pg id already exist %d\n", id);
         return -1;
     }
+    sprintf(buf, "/dev/shm/DSM%d", id);
+    dsmpg = insert(id, sz);
     if(new_map_file(buf, dsmpg)){
         printk("new_map_fd_install failed\n");
         return -1;
