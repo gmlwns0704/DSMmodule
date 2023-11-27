@@ -230,7 +230,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
 
 static int new_map_file(const char* buf, struct DSMpg_info* node){
     int ret;
-    ret = kern_path(buf, LOOKUP_DOWN, &(node->path));
+    ret = kern_path(buf, LOOKUP_FOLLOW, &(node->path));
     if(ret){
         printk("kern_path failed %d\n", ret);
         return ret;
