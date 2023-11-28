@@ -76,9 +76,9 @@ struct msg_header{
     unsigned int sz; //pg size
 };
 
-static struct DSMpg_info* find(int input_id);
-static struct DSMpg_info* insert(int input_id, unsigned int input_sz);
-static int remove(int input_id);
+static struct DSMpg_info* list_find(int input_id);
+static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz);
+static int list_remove(int input_id);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
 static int new_map_file(const char* buf, unsigned int sz);
@@ -129,7 +129,11 @@ module_param(dsm_port, int, 0600);
 // };
 
 //페이지 정보 링크드 리스트
-static struct DSMpg_info* find(int input_id){
+
+/*
+특정 id의 노드 탐색, 없으면 NULL
+*/
+static struct DSMpg_info* list_find(int input_id){
     struct DSMpg_info* node = head;
     if(!head || head->id == input_id)
         return head;
@@ -138,7 +142,11 @@ static struct DSMpg_info* find(int input_id){
     return node->next;
 }
 
-static struct DSMpg_info* insert(int input_id, unsigned int input_sz){
+/*
+특정 id의 노드 입력하고 입력된 노드 리턴
+사용 이전에 
+*/
+static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz){
     struct DSMpg_info* node = head;
     struct DSMpg_info* new = kvmalloc(sizeof(struct DSMpg_info), GFP_KERNEL);
     if(IS_ERR(new))
@@ -148,28 +156,22 @@ static struct DSMpg_info* insert(int input_id, unsigned int input_sz){
     new->sz = input_sz;
     if(!head){
         head = new;
-        if(IS_ERR(head)){
-            printk("insert: kmalloc failed\n");
-            kvfree(new);
-            new = NULL;
-        }
+        nodnum++;
         return new;
     }
 
     while(node->next)
         node = node->next;
+    node->next = new;
+    nodnum++;
 
-    if(IS_ERR(node->next)){
-        printk("insert: kmalloc failed\n");
-        kvfree(new);
-        new = NULL;
-    }
-    if(new)
-        nodnum++;
     return new;
 }
 
-static int remove(int input_id){
+/*
+특정 id의 노드 제거
+*/
+static int list_remove(int input_id){
     struct DSMpg_info* node = head;
     if(!head)
         return -1;
@@ -190,6 +192,19 @@ static int remove(int input_id){
     return 0;
 }
 
+/*
+링크드 리스트 완전초기화
+*/
+static int list_reset(){
+    struct DSMpg_info* next_head;
+    while(head){
+        next_head = head->next;
+        kvfree(head);
+        head = next_head;
+    }
+    return 0;
+}
+
 static int new_map_fd_install(struct DSMpg* dsmpg){
     struct DSMpg_info* node;
     struct file* fp;
@@ -198,11 +213,11 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
 
     sprintf(buf, "/dev/shm/DSM%d", dsmpg->dsmpg_id);
 
-    node = find(dsmpg->dsmpg_id);
+    node = list_find(dsmpg->dsmpg_id);
     is_new = !node;
     if(is_new){
         //링크드 리스트에 삽입
-        node = insert(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
+        node = list_insert(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
         ret = !node;
         if(ret){
             printk("insert failed %d\n", ret);
@@ -287,7 +302,7 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
             }
         break;
         case DSM_IOCTL_FORCE_UPDATE:
-            node = find(dsmpg.dsmpg_id);
+            node = list_find(dsmpg.dsmpg_id);
             if(!node){
                 printk("DSM_IOCTL_FORCE_UPDATE to non exist id %d\n", dsmpg.dsmpg_id);
                 return -1;
@@ -299,7 +314,7 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
             }
         break;
         case DSM_IOCTL_GET_UPDATE:
-            node = find(dsmpg.dsmpg_id);
+            node = list_find(dsmpg.dsmpg_id);
             if(!node){
                 printk("DSM_IOCTL_GET_UPDATE to non exist id %d\n", dsmpg.dsmpg_id);
                 return -1;
@@ -478,7 +493,7 @@ static int dsm_connect(const char* ip, int port){
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
         printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
         /*loop 종료 조건*/
-        node = insert(node_buf.id, node_buf.sz);
+        node = list_insert(node_buf.id, node_buf.sz);
         sprintf(buf, "/dev/shm/DSM%d", node_buf.id);
         new_map_file(buf, node_buf.sz);
     }
@@ -508,8 +523,8 @@ static int dsm_recv_thread(void* arg){
         printk("handle msg id:%d, type:%d\n", header.id, header.type);
         switch(header.type){
             case DSM_NEW_PG:
-                if(find(header.id)){
-                    printk("DSM_NEW_PG to exist id %d (find returned %p), ignored\n", header.id, find(header.id));
+                if(list_find(header.id)){
+                    printk("DSM_NEW_PG to exist id %d (find returned %p), ignored\n", header.id, list_find(header.id));
                     break;   
                 }
                 if(!dsm_msg_handle_new_pg(header.id, header.sz)){
@@ -518,7 +533,7 @@ static int dsm_recv_thread(void* arg){
                 }
             break;
             case DSM_UPDATE_PG:
-                dsmpg = find(header.id);
+                dsmpg = list_find(header.id);
                 if(!dsmpg){
                     printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
                     break;
@@ -535,7 +550,7 @@ static int dsm_recv_thread(void* arg){
                 kvfree(buf);
             break;
             case DSM_REQUEST_PG:
-                if(!find(header.id)){
+                if(!list_find(header.id)){
                     printk("DSM_REQUSET_PG to non exist id %d, ignored\n", header.id);
                     break;   
                 }
@@ -642,12 +657,12 @@ static int dsm_msg_request_pg(int id){
 static int dsm_msg_handle_new_pg(int id, unsigned int sz){
     struct DSMpg_info* dsmpg;
     char buf[64];
-    if(find(id)){
+    if(list_find(id)){
         printk("dms_msg_handle_new_pg id already exist %d\n", id);
         return -1;
     }
     sprintf(buf, "/dev/shm/DSM%d", id);
-    dsmpg = insert(id, sz);
+    dsmpg = list_insert(id, sz);
     if(new_map_file(buf, dsmpg->sz)){
         printk("new_map_file failed\n");
         return -1;
@@ -681,7 +696,7 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
 }
 
 static int dsm_msg_handle_request_pg(int id){
-    struct DSMpg_info* dsmpg = find(id);
+    struct DSMpg_info* dsmpg = list_find(id);
     return dsm_msg_update_pg(dsmpg);
 }
 
