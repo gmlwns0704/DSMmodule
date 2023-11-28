@@ -41,6 +41,7 @@
 static enum msg_type{
     DSM_NEW_PG = 0,
     DSM_UPDATE_PG,
+    DSM_UPDATE_PG2, //페이지 전체를 전송하지 않고 수정할 부분만 전송
     DSM_REMOVE_PG,
     DSM_REQUEST_PG
 };
@@ -54,23 +55,25 @@ static enum msg_type{
 //커스텀 mmap설정, 커스텀 fault설정
 //https://pr0gr4m.tistory.com/entry/Linux-Kernel-5-mmap
 
-// 특정 페이지에 대한 각종 정보들, 사용자를 위한 정보도 포함
+// 특정 페이지에 대해 ioctl등으로 사용자와 통신시 사용하는 구조체
 struct DSMpg{
     int dsmpg_id;
     int dsmpg_fd;
     unsigned int dsmpg_sz;
 };
 
+// 모듈에서 참조하는 링크드 리스트
 struct DSMpg_info{
     struct DSMpg_info* next;
     int id;
     unsigned int sz;
 };
 
+// 메시지 헤더
 struct msg_header{
     enum msg_type type; //msg type
     int id; //pg id
-    uint sz; //pg size
+    unsigned int sz; //pg size
 };
 
 static struct DSMpg_info* find(int input_id);
@@ -78,17 +81,17 @@ static struct DSMpg_info* insert(int input_id, unsigned int input_sz);
 static int remove(int input_id);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
-static int new_map_file(const char* buf, uint sz);
+static int new_map_file(const char* buf, unsigned int sz);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
 static int dsm_recv_thread(void* arg);
 
-static int dsm_msg_new_pg(int id, uint sz);
+static int dsm_msg_new_pg(int id, unsigned int sz);
 static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
 static int dsm_msg_request_pg(int id);
 
-static int dsm_msg_handle_new_pg(int id, uint sz);
+static int dsm_msg_handle_new_pg(int id, unsigned int sz);
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 static int dsm_msg_handle_request_pg(int id);
 
@@ -226,14 +229,11 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
 
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
-    fd_install(dsmpg->dsmpg_fd, fp);
 
-    //종료
-    filp_close(fp, NULL);
     return 0;
 }
 
-static int new_map_file(const char* buf, uint sz){
+static int new_map_file(const char* buf, unsigned int sz){
     struct file* fp;
     int ret;
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
@@ -326,7 +326,7 @@ static vm_fault_t dsm_vma_fault(struct vm_fault* vmf){
     //or peer로부터 페이지 정보를 받고 페이지 할당 후 반영?
     struct page* page;
     void* pg_ptr;
-    uint offset;
+    unsigned int offset;
 
     page = follow_page(vma, vma->address, FOLL_WRITE|FOLL_FORCE);
 
@@ -554,7 +554,7 @@ static int dsm_recv_thread(void* arg){
 
 //메시지 send관련
 
-static int dsm_msg_new_pg(int id, uint sz){
+static int dsm_msg_new_pg(int id, unsigned int sz){
     struct msghdr msg;
     struct kvec iv;
     struct msg_header header;
@@ -579,7 +579,7 @@ static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
     void* msg_buf;
     struct msghdr msg;
     struct kvec iv;
-    uint offset = 0;
+    unsigned int offset = 0;
     
     msg_buf = kvmalloc(sizeof(DSM_UPDATE_PG)+sizeof(dsmpg->id)+dsmpg->sz, GFP_KERNEL);
     if(IS_ERR(msg_buf)){
@@ -639,10 +639,10 @@ static int dsm_msg_request_pg(int id){
 
 //메시지 recv관련
 
-static int dsm_msg_handle_new_pg(int id, uint sz){
+static int dsm_msg_handle_new_pg(int id, unsigned int sz){
     struct DSMpg_info* dsmpg;
     char buf[64];
-    if(!find(id)){
+    if(find(id)){
         printk("dms_msg_handle_new_pg id already exist %d\n", id);
         return -1;
     }
