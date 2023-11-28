@@ -79,6 +79,7 @@ struct msg_header{
 static struct DSMpg_info* list_find(int input_id);
 static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz);
 static int list_remove(int input_id);
+static int list_reset(void);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
 static int new_map_file(const char* buf, unsigned int sz);
@@ -195,7 +196,7 @@ static int list_remove(int input_id){
 /*
 링크드 리스트 완전초기화
 */
-static int list_reset(){
+static int list_reset(void){
     struct DSMpg_info* next_head;
     while(head){
         next_head = head->next;
