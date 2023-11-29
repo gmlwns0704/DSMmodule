@@ -176,21 +176,25 @@ static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz){
 */
 static int list_remove(int input_id){
     struct DSMpg_info* node = head;
+    struct DSMpg_info* target;
     if(!head)
         return -1;
     if(head->id == input_id){
         kvfree(head);
+        head = NULL;
         nodnum--;
         return 0;
     }
     
     while(node->next && node->next->id != input_id)
         node = node->next;
+    target = node->next;
     
-    if(!(node->next))
+    if(!target)
         return -1;
 
-    kvfree(node->next);
+    node->next = target->next;
+    kvfree(target);
     nodnum--;
     return 0;
 }
@@ -205,6 +209,7 @@ static int list_reset(void){
         kvfree(head);
         head = next_head;
     }
+    nodnum = 0;
     return 0;
 }
 
@@ -524,7 +529,7 @@ static int dsm_recv_thread(void* arg){
         iv.iov_base = &header;
         iv.iov_len = sizeof(header);
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
-        printk("handle msg id:%d, type:%d\n", header.id, header.type);
+        printk("handle msg id:%d, type:%d, sz:%d\n", header.id, header.type, header.sz);
         switch(header.type){
             case DSM_NEW_PG:
                 if(list_find(header.id)){
@@ -687,9 +692,10 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         printk("filp_open failed\n");
         return -1;
     }
-    pg = find_get_page(fp->f_mapping, 0);
+    printk("find_get_page(%p, %d)\n", fp->f_mapping, fp->f_pos >> PAGE_SHIFT);
+    pg = find_get_page(fp->f_mapping, fp->f_pos >> PAGE_SHIFT);
     if(!pg){
-        printk("find_lock_page failed\n");
+        printk("find_get_page failed\n");
         return -1;
     }
 
