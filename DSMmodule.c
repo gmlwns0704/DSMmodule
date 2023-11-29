@@ -231,6 +231,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
             printk("insert failed %d\n", ret);
             return ret;
         }
+        new_map_file(buf, dsmpg->dsmpg_sz);
         //새로운 페이지 생성 알림
         dsm_msg_new_pg(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
     }
@@ -240,14 +241,6 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     if(IS_ERR(fp)){
         printk("filp_open failed\n");
         return -1;
-    }
-
-    if(is_new){
-        ret = vfs_truncate(&fp->f_path, dsmpg->dsmpg_sz);
-        if(ret){
-            printk("vfs_truncate failed %d\n", ret);
-            return ret;
-        }
     }
 
     //유저에게 fd설정
@@ -584,6 +577,7 @@ static int dsm_msg_new_pg(int id, unsigned int sz){
 
     header.type = DSM_NEW_PG;
     header.id = id;
+    header.sz = sz;
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
@@ -650,6 +644,7 @@ static int dsm_msg_request_pg(int id){
 
     header.type = DSM_REQUEST_PG;
     header.id = id;
+    header.sz = 0;
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
@@ -672,7 +667,7 @@ static int dsm_msg_handle_new_pg(int id, unsigned int sz){
     }
     sprintf(buf, "/dev/shm/DSM%d", id);
     dsmpg = list_insert(id, sz);
-    if(new_map_file(buf, dsmpg->sz)){
+    if(new_map_file(buf, sz)){
         printk("new_map_file failed\n");
         return -1;
     }
