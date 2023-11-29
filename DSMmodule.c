@@ -54,6 +54,8 @@ static enum msg_type{
 //https://stackoverflow.com/questions/10441392/major-page-fault-handler-in-linux-kernel
 //커스텀 mmap설정, 커스텀 fault설정
 //https://pr0gr4m.tistory.com/entry/Linux-Kernel-5-mmap
+//address space구조체 설명
+//https://hooneyo.tistory.com/entry/%ED%8E%98%EC%9D%B4%EC%A7%80-%EC%BA%90%EC%8B%9C
 
 // 특정 페이지에 대해 ioctl등으로 사용자와 통신시 사용하는 구조체
 struct DSMpg{
@@ -536,10 +538,6 @@ static int dsm_recv_thread(void* arg){
             break;
             case DSM_UPDATE_PG:
                 dsmpg = list_find(header.id);
-                if(!dsmpg){
-                    printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
-                    break;
-                }
                 buf = kvmalloc(header.sz, GFP_KERNEL);
                 if(IS_ERR(buf)){
                     printk("kvmalloc failed\n");
@@ -548,7 +546,10 @@ static int dsm_recv_thread(void* arg){
                 iv.iov_base = buf;
                 iv.iov_len = header.sz;
                 kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
-                dsm_msg_handle_update_pg(dsmpg, buf);
+                if(!dsmpg)
+                    printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
+                else
+                    dsm_msg_handle_update_pg(dsmpg, buf);
                 kvfree(buf);
             break;
             case DSM_REQUEST_PG:
@@ -561,7 +562,7 @@ static int dsm_recv_thread(void* arg){
             case DSM_REMOVE_PG:
             break;
             default:
-            printk("unknown msg type\n");
+                printk("unknown msg type\n");
             break;
         }
     }
@@ -605,6 +606,7 @@ static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
     }
     ((struct msg_header*)msg_buf)->type = DSM_UPDATE_PG;
     ((struct msg_header*)msg_buf)->id = dsmpg->id;
+    ((struct msg_header*)msg_buf)->sz = dsmpg->sz;
     offset += sizeof(struct msg_header);
 
     //업데이트할 파일 열기
@@ -685,7 +687,7 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         printk("filp_open failed\n");
         return -1;
     }
-    pg = find_lock_page(fp->f_mapping, 0);
+    pg = find_get_page(fp->f_mapping, 0);
     if(!pg){
         printk("find_lock_page failed\n");
         return -1;
