@@ -245,6 +245,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
 
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
+    fd_install(dsmpg->dsmpg_fd, fp);
 
     return 0;
 }
@@ -528,7 +529,7 @@ static int dsm_recv_thread(void* arg){
                     printk("DSM_NEW_PG to exist id %d (find returned %p), ignored\n", header.id, list_find(header.id));
                     break;   
                 }
-                if(!dsm_msg_handle_new_pg(header.id, header.sz)){
+                if(dsm_msg_handle_new_pg(header.id, header.sz)){
                     printk("dsm_msg_handle_new_pg failed, ignored\n");
                     break;
                 }
