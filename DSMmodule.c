@@ -18,9 +18,11 @@
 
 //메모리
 #include <linux/mm.h>
+#include <linux/mm_types.h>
 #include <linux/sched.h>
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
+#include <linux/page-flags.h>
 
 //소켓
 #include <linux/net.h>
@@ -43,7 +45,8 @@ static enum msg_type{
     DSM_UPDATE_PG,
     DSM_UPDATE_PG2, //페이지 전체를 전송하지 않고 수정할 부분만 전송
     DSM_REMOVE_PG,
-    DSM_REQUEST_PG
+    DSM_REQUEST_PG,
+    DSM_FINISH
 };
 
 //모듈 프로그래밍 참고용
@@ -67,6 +70,7 @@ struct DSMpg{
 // 모듈에서 참조하는 링크드 리스트
 struct DSMpg_info{
     struct DSMpg_info* next;
+    struct inode* inode;
     int id;
     unsigned int sz;
 };
@@ -78,13 +82,15 @@ struct msg_header{
     unsigned int sz; //pg size
 };
 
+//함수 선언
 static struct DSMpg_info* list_find(int input_id);
-static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz);
+static struct DSMpg_info* list_find_by_inode(const struct inode* inode);
+static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struct file* fp);
 static int list_remove(int input_id);
 static int list_reset(void);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
-static int new_map_file(const char* buf, unsigned int sz);
+static struct DSMpg_info* new_map_file(int id, unsigned int sz);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
@@ -93,10 +99,12 @@ static int dsm_recv_thread(void* arg);
 static int dsm_msg_new_pg(int id, unsigned int sz);
 static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
 static int dsm_msg_request_pg(int id);
+static void dsm_msg_finish(void);
 
 static int dsm_msg_handle_new_pg(int id, unsigned int sz);
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 static int dsm_msg_handle_request_pg(int id);
+static void dsm_msg_handle_finish(void);
 
 //모듈 상태
 static bool mod_ready = 0;
@@ -110,11 +118,15 @@ static struct sockaddr_in peer_addr;
 static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
 static struct task_struct* recv_thread = NULL;
+//args
 char* dsm_ip_addr;
 int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
+//DSM mappage파일을 위한 a_ops
+extern const struct address_space_operations shmem_aops;
+static struct address_space_operations dsm_shmem_aops;
 
 //arguments
 //charp: char*
@@ -145,11 +157,20 @@ static struct DSMpg_info* list_find(int input_id){
     return node->next;
 }
 
+static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
+    struct DSMpg_info* node = head;
+    if(!head || head->inode == inode)
+        return head;
+    while(node->next && node->next->inode != inode)
+        node = node->next;
+    return node->next;
+}
+
 /*
 특정 id의 노드 입력하고 입력된 노드 리턴
 사용 이전에 
 */
-static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz){
+static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struct file* fp){
     struct DSMpg_info* node = head;
     struct DSMpg_info* new = kvmalloc(sizeof(struct DSMpg_info), GFP_KERNEL);
     if(IS_ERR(new))
@@ -157,6 +178,7 @@ static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz){
     new->next = NULL;
     new->id = input_id;
     new->sz = input_sz;
+    new->inode = fp->f_inode;
     if(!head){
         head = new;
         nodnum++;
@@ -225,13 +247,11 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     is_new = !node;
     if(is_new){
         //링크드 리스트에 삽입
-        node = list_insert(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
-        ret = !node;
-        if(ret){
+        node = new_map_file(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
+        if(!node){
             printk("insert failed %d\n", ret);
-            return ret;
+            return -1;
         }
-        new_map_file(buf, dsmpg->dsmpg_sz);
         //새로운 페이지 생성 알림
         dsm_msg_new_pg(dsmpg->dsmpg_id, dsmpg->dsmpg_sz);
     }
@@ -243,6 +263,9 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         return -1;
     }
 
+    //address_space의 a_ops를 커스텀 aops로 설정
+    fp->f_mapping->a_ops = &dsm_shmem_aops;
+
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
     fd_install(dsmpg->dsmpg_fd, fp);
@@ -250,21 +273,23 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     return 0;
 }
 
-static int new_map_file(const char* buf, unsigned int sz){
+static struct DSMpg_info* new_map_file(int id, unsigned int sz){
     struct file* fp;
-    int ret;
+    char buf[32];
+    struct DSMpg_info* ret;
+    sprintf(buf, "/dev/shm/DSM%d", id);
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(IS_ERR(fp)){
         printk("filp_open failed\n");
-        return -1;
+        return NULL;
     }
-    ret = vfs_truncate(&fp->f_path, sz);
-    if(ret){
-        printk("vfs_truncate failed %d\n", ret);
-        return ret;
+    if(vfs_truncate(&fp->f_path, sz)){
+        printk("vfs_truncate failed\n");
+        return NULL;
     }
+    ret = list_insert(id, sz, fp);
     filp_close(fp, NULL);
-    return 0;
+    return ret;
 }
 
 //커널 기능
@@ -445,9 +470,7 @@ static int dsm_connect(const char* ip, int port){
     struct msghdr msg;
     struct kvec iv;
     struct DSMpg_info node_buf;
-    struct DSMpg_info* node;
     unsigned char ip_bytes[4];
-    char buf[32];
     int ret, i;
 
     /* Check the SOCK_* constants for consistency.  */
@@ -495,9 +518,7 @@ static int dsm_connect(const char* ip, int port){
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
         printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
         /*loop 종료 조건*/
-        node = list_insert(node_buf.id, node_buf.sz);
-        sprintf(buf, "/dev/shm/DSM%d", node_buf.id);
-        new_map_file(buf, node_buf.sz);
+        new_map_file(node_buf.id, node_buf.sz);
     }
 
     printk("DSM mod ready\n");
@@ -518,7 +539,7 @@ static int dsm_recv_thread(void* arg){
     msg.msg_name = (struct sockaddr*)peer_sock;
     msg.msg_namelen = sizeof(*peer_sock);
 
-    while(1){
+    while(mod_ready){
         iv.iov_base = &header;
         iv.iov_len = sizeof(header);
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
@@ -656,6 +677,24 @@ static int dsm_msg_request_pg(int id){
     return 0;
 }
 
+static void dsm_msg_finish(void){
+    struct msghdr msg;
+    struct kvec iv;
+    struct msg_header header;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    header.type = DSM_REQUEST_PG;
+    header.id = 0;
+    header.sz = 0;
+
+    iv.iov_base = &header;
+    iv.iov_len = sizeof(header);
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
+}
+
 //메시지 recv관련
 
 static int dsm_msg_handle_new_pg(int id, unsigned int sz){
@@ -666,8 +705,8 @@ static int dsm_msg_handle_new_pg(int id, unsigned int sz){
         return -1;
     }
     sprintf(buf, "/dev/shm/DSM%d", id);
-    dsmpg = list_insert(id, sz);
-    if(new_map_file(buf, sz)){
+    dsmpg = new_map_file(id, sz);
+    if(!dsmpg){
         printk("new_map_file failed\n");
         return -1;
     }
@@ -700,6 +739,29 @@ static int dsm_msg_handle_request_pg(int id){
     return dsm_msg_update_pg(dsmpg);
 }
 
+static void dsm_msg_handle_finish(void){
+    list_reset();
+}
+
+static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc){
+    struct folio *folio = page_folio(page);
+	struct address_space *mapping = folio->mapping;
+    struct inode *inode = mapping->host;
+    struct DSMpg_info* dsmpg;
+    void* va;
+    /*
+    DSMpg_info의 linked list를 조회하며 inode에 해당하는 파일의 노드 구하기
+    해당 노드의 정보로 dsm_msg_update_pg 수행
+    va에 kmap으로 매핑, 메시지 전송 후 kunmap
+    */
+    dsmpg = list_find_by_inode(inode);
+    va = kmap(page);
+    if(dsm_msg_update_pg(dsmpg))
+        printk("from dsm_shmem_writepage, dsm_msg_update_pg failed\n");
+    kunmap(page);
+    return shmem_aops.writepage(page, wbc);
+}
+
 struct file_operations fops = {
     .owner = THIS_MODULE,
     .unlocked_ioctl = dsm_ioctl
@@ -716,6 +778,11 @@ static int __init dsm_init(void)
 
     memset(&path, 0, sizeof(path));
     dv_dst = cl_dst = cdv_dst = ureg = 0;
+
+    //dsm_shmem_aops 설정
+    printk("set dsm_shmem_aops\n");
+    dsm_shmem_aops = shmem_aops;
+    dsm_shmem_aops.writepage = dsm_shmem_writepage;
 
     //디바이스 파일 생성
     //register_chrdev(DEV_MAJOR, DEV_NAME, &fops);
@@ -788,11 +855,25 @@ failed:
 
 static void __exit dsm_exit(void)
 {
+    int ret;
+    //디바이스 관련 종료
     device_destroy(dv_class, dv_dv);
     class_destroy(dv_class);
     cdev_del(&dv_cdv);
     unregister_chrdev_region(dv_dv, 1);
+    printk("remove device stop\n");
+    //recv스레드 종료
+    mod_ready = 0;
     kthread_stop(recv_thread);
+    printk("recv_thread stop\n");
+    //소켓 종료
+    ret = peer_sock->ops->shutdown(peer_sock, 0);
+    if(ret)
+        printk("peer_sock shutdown failed\n");
+    ret = my_sock->ops->shutdown(my_sock, 0);
+    if(ret)
+        printk("my_sock shutdown failed\n");
+    printk("socket shutdown done\n");
     printk("DSM exit!\n");
 }
 
