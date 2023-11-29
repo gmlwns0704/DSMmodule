@@ -682,8 +682,8 @@ static int dsm_msg_handle_new_pg(int id, unsigned int sz){
 
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
     struct file* fp;
-    struct page* pg;
     char buf[64];
+    mm_segment_t old_fs;
 
     //업데이트할 파일 열기
     sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
@@ -692,15 +692,10 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         printk("filp_open failed\n");
         return -1;
     }
-    printk("find_get_page(%p, %d)\n", fp->f_mapping, fp->f_pos >> PAGE_SHIFT);
-    pg = find_get_page(fp->f_mapping, fp->f_pos >> PAGE_SHIFT);
-    if(!pg){
-        printk("find_get_page failed\n");
-        return -1;
-    }
-
-    memcpy(kmap(pg), data, dsmpg->sz);
-    kunmap(pg);
+    old_fs = get_fs();
+    set_fs(KERNEL_DS);
+    vfs_write(fp, data, dsmpg->sz, fp->f_pos);
+    set_fs(old_fs);
     filp_close(fp, NULL);
     return 0;
 }
