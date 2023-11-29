@@ -729,7 +729,7 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         printk("filp_open failed\n");
         return -1;
     }
-    vfs_write(fp, data, dsmpg->sz, fp->f_pos);
+    kernel_write(fp, data, dsmpg->sz, fp->f_pos);
     filp_close(fp, NULL);
     return 0;
 }
