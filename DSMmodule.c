@@ -49,6 +49,10 @@ static enum msg_type{
     DSM_FINISH
 };
 
+/*
+
+*/
+
 //모듈 프로그래밍 참고용
 //가이드
 //https://sysprog21.github.io/lkmpg/
@@ -717,7 +721,6 @@ static int dsm_msg_handle_new_pg(int id, unsigned int sz){
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
     struct file* fp;
     char buf[64];
-    mm_segment_t old_fs;
 
     //업데이트할 파일 열기
     sprintf(buf, "/dev/shm/DSM%d", dsmpg->id);
@@ -726,10 +729,7 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         printk("filp_open failed\n");
         return -1;
     }
-    old_fs = get_fs();
-    set_fs(KERNEL_DS);
     vfs_write(fp, data, dsmpg->sz, fp->f_pos);
-    set_fs(old_fs);
     filp_close(fp, NULL);
     return 0;
 }
