@@ -31,6 +31,9 @@
 //스레드
 #include <linux/kthread.h>
 
+//동기화
+#include <linux/spinlock.h>
+
 
 #define DEV_NAME "DSMmodule"
 #define DSM_TMP_DIR "/tmp/DSM"
@@ -50,7 +53,8 @@ static enum msg_type{
 };
 
 /*
-
+해당 모듈은 struct folio를 지원하는 커널을 가정하여 작성되었음, 이는 5.16.x버전 이상이어야 함
+대표적인 예시로는 ubuntu 23.04가 있음
 */
 
 //모듈 프로그래밍 참고용
@@ -122,6 +126,7 @@ static struct sockaddr_in peer_addr;
 static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
 static struct task_struct* recv_thread = NULL;
+DEFINE_SPINLOCK(recv_msg_lock);
 //args
 char* dsm_ip_addr;
 int dsm_port;
@@ -129,8 +134,8 @@ int dsm_port;
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
 //DSM mappage파일을 위한 a_ops
-extern const struct address_space_operations shmem_aops;
-static struct address_space_operations dsm_shmem_aops;
+extern const struct address_space_operations shmem_aops; //원본 shmem_aops
+static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
 
 //arguments
 //charp: char*
@@ -546,6 +551,8 @@ static int dsm_recv_thread(void* arg){
     while(mod_ready){
         iv.iov_base = &header;
         iv.iov_len = sizeof(header);
+        //critical start
+        spin_lock(&recv_msg_lock);
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
         printk("handle msg id:%d, type:%d, sz:%d\n", header.id, header.type, header.sz);
         switch(header.type){
@@ -562,10 +569,8 @@ static int dsm_recv_thread(void* arg){
             case DSM_UPDATE_PG:
                 dsmpg = list_find(header.id);
                 buf = kvmalloc(header.sz, GFP_KERNEL);
-                if(IS_ERR(buf)){
+                if(IS_ERR(buf))
                     printk("kvmalloc failed\n");
-                    break;
-                }
                 iv.iov_base = buf;
                 iv.iov_len = header.sz;
                 kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
@@ -573,7 +578,8 @@ static int dsm_recv_thread(void* arg){
                     printk("DSM_UPDATE_PG to non exist id %d, ignored\n", header.id);
                 else
                     dsm_msg_handle_update_pg(dsmpg, buf);
-                kvfree(buf);
+                if(!IS_ERR(buf))
+                    kvfree(buf);
             break;
             case DSM_REQUEST_PG:
                 if(!list_find(header.id)){
@@ -588,6 +594,8 @@ static int dsm_recv_thread(void* arg){
                 printk("unknown msg type\n");
             break;
         }
+        //critical end
+        spin_unlock(&recv_msg_lock);
     }
 
     return -1;
