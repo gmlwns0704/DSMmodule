@@ -756,17 +756,17 @@ static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc)
 	struct address_space *mapping = folio->mapping;
     struct inode *inode = mapping->host;
     struct DSMpg_info* dsmpg;
-    void* va;
     /*
     DSMpg_info의 linked list를 조회하며 inode에 해당하는 파일의 노드 구하기
     해당 노드의 정보로 dsm_msg_update_pg 수행
-    va에 kmap으로 매핑, 메시지 전송 후 kunmap
     */
+    printk("dsm_shmem_writepage occured\n");
     dsmpg = list_find_by_inode(inode);
-    va = kmap(page);
-    if(dsm_msg_update_pg(dsmpg))
-        printk("from dsm_shmem_writepage, dsm_msg_update_pg failed\n");
-    kunmap(page);
+    printk("found dsmpg %d\n", dsmpg->id);
+    if(dsmpg){
+        if(dsm_msg_update_pg(dsmpg))
+            printk("from dsm_shmem_writepage, dsm_msg_update_pg failed\n");
+    }
     return shmem_aops.writepage(page, wbc);
 }
 
