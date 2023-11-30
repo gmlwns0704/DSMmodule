@@ -136,6 +136,16 @@ static int nodnum = 0;
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
+//mm/shmem.c shmem_file_operations 포인터, static이므로 포인터를 통한 참조
+DEFINE_SPINLOCK(shmem_file_operations_ptr_lock);
+const struct file_operations* shmem_file_operations_ptr = NULL;
+//dsm매핑 파일을 위한 file operations
+struct file_operations dsm_shmem_file_operations;
+//mm/shmem.c shmem_vm_ops 포인터, static이므로 포인터를 통한 참조
+DEFINE_SPINLOCK(shmem_vm_ops_ptr);
+const struct vm_operations_struct* shmem_vm_ops_ptr = NULL;
+//dsm_shmem_fops->mmap내부에서 vma의 vm_ops를 수정하기 위함, 이는 dsm_fault를 사용하기위함
+struct vm_operations_struct dsm_shmem_vm_ops;
 
 //arguments
 //charp: char*
@@ -271,9 +281,25 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         printk("filp_open failed\n");
         return -1;
     }
+    //new_map_fd_install발생시 원본 fops포인터를 참조를 수행함
+    //모듈이 실행되고 딱 한번만 수행
+    if(!shmem_file_operations_ptr){
+        spin_lock(&shmem_file_operations_lock);
+        if(!shmem_file_operations_ptr){
+            //원본 포인터 저장
+            shmem_file_operations_ptr = fp->f_ops;
+            //복사, 나머지 operations는 원본 그대로
+            memcpy(&dsm_shmem_file_operations, shmem_file_operations_ptr, sizeof(*shmem_file_operations_ptr));
+            //fault함수 설정
+            dsm_shmem_file_operations.mmap = dsm_mmap;
+        }
+        spin_unlock(&shmem_file_operations_lock);
+    }
 
     //address_space의 a_ops를 커스텀 aops로 설정
     fp->f_mapping->a_ops = &dsm_shmem_aops;
+    //fp->_fops을 dsm_fops로 변경
+    fp->f_op = &dsm_shmem_file_operations;
 
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
@@ -296,6 +322,7 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
         printk("vfs_truncate failed\n");
         return NULL;
     }
+    //종료
     ret = list_insert(id, sz, fp);
     filp_close(fp, NULL);
     return ret;
@@ -751,6 +778,8 @@ static void dsm_msg_handle_finish(void){
     list_reset();
 }
 
+//address spcae aops
+
 static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc){
     struct folio *folio = page_folio(page);
 	struct address_space *mapping = folio->mapping;
@@ -770,6 +799,38 @@ static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc)
     return shmem_aops.writepage(page, wbc);
 }
 
+//vma vops
+
+static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
+    //mmap발생시 원본 vma포인터를 참조를 수행함
+    //모듈이 실행되고 딱 한번만 수행
+    if(!shmem_vm_ops_ptr){
+        spin_lock(&shmem_vm_ops_lock);
+        if(!shmem_vm_ops_ptr){
+            //원본 포인터 저장
+            shmem_vm_ops_ptr = vma->vm_ops;
+            //복사, 나머지 operations는 원본 그대로
+            memcpy(&dsm_shmem_vm_ops, shmem_vm_ops_ptr, sizeof(*shmem_vm_ops_ptr));
+            //fault함수 설정
+            dsm_shmem_vm_ops.fault = dsm_fault;
+        }
+        spin_unlock(&shmem_vm_ops_lock);
+    }
+    //dsm_fault가 할당된 operations
+    vma->vm_ops = &dsm_shmem_vm_ops;
+    return shmem_file_operations_ptr->mmap(fp, vma);
+}
+
+static vm_fault_t dsm_fault(struct vm_fault vmf){
+    int orig_ret = shmem_vm_ops_ptr->fault(vmf);
+    struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
+    if(dsmpg)
+        dsm_msg_update_pg(dsmpg);
+    else
+        printk("dsm_fault occured but inode is invalid\n");
+    return orig_ret;
+}
+
 struct file_operations fops = {
     .owner = THIS_MODULE,
     .unlocked_ioctl = dsm_ioctl
@@ -780,6 +841,7 @@ static int __init dsm_init(void)
     //변수+초기화
     int err = 0;
     struct path path;
+    struct file* shmem_fp;
     bool dv_dst, cl_dst, cdv_dst, ureg;
 
     printk("DSM init start\n");
@@ -791,6 +853,9 @@ static int __init dsm_init(void)
     printk("set dsm_shmem_aops\n");
     dsm_shmem_aops = shmem_aops;
     dsm_shmem_aops.writepage = dsm_shmem_writepage;
+
+    //dsm_shmem_fops, dsm_vm_ops 설정, shmem_file_operations, shmem_vm_ops의 포인터를 얻고 memcpy해야함
+    shmem_file_operations_ptr = 
 
     //디바이스 파일 생성
     //register_chrdev(DEV_MAJOR, DEV_NAME, &fops);
