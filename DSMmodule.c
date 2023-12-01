@@ -116,6 +116,7 @@ static void dsm_msg_handle_finish(void);
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf);
 static int dsm_mmap(struct file* fp, struct vm_area_struct* vma);
+static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write);
 
 //모듈 상태
 static bool mod_ready = 0;
@@ -149,6 +150,8 @@ DEFINE_SPINLOCK(shmem_vm_ops_lock);
 struct vm_operations_struct* shmem_vm_ops_ptr = NULL;
 //dsm_shmem_fops->mmap내부에서 vma의 vm_ops를 수정하기 위함, 이는 dsm_fault를 사용하기위함
 struct vm_operations_struct dsm_shmem_vm_ops;
+//실제 phys메모리에 접근
+extern int generic_access_phys(struct vm_area_struct *vma, unsigned long addr, void *buf, int len, int write);
 
 //arguments
 //charp: char*
@@ -819,6 +822,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
             memcpy(&dsm_shmem_vm_ops, shmem_vm_ops_ptr, sizeof(*shmem_vm_ops_ptr));
             //fault함수 설정
             dsm_shmem_vm_ops.fault = dsm_fault;
+            dsm_shmem_vm_ops.access = dsm_access_phys;
         }
         spin_unlock(&shmem_vm_ops_lock);
     }
@@ -830,6 +834,18 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf){
     int orig_ret = shmem_vm_ops_ptr->fault(vmf);
+    struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
+    printk("custom dsm_fault occured\n");
+    if(dsmpg)
+        dsm_msg_update_pg(dsmpg);
+    else
+        printk("dsm_fault occured but inode is invalid\n");
+    return orig_ret;
+}
+
+//매핑된 실제 물리 메모리에 접근할 때 작동
+static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write){
+    int orig_ret = generic_access_phys(vma, addr, buf, len, write);
     struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
     printk("custom dsm_fault occured\n");
     if(dsmpg)
