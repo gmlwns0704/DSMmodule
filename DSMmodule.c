@@ -789,7 +789,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
             memcpy(&dsm_shmem_vm_ops, shmem_vm_ops_ptr, sizeof(*shmem_vm_ops_ptr));
             //fault함수 설정
             dsm_shmem_vm_ops.fault = dsm_fault;
-            dsm_shmem_vm_ops.access = dsm_access_phys;
+            // dsm_shmem_vm_ops.access = dsm_access_phys;
         }
         spin_unlock(&shmem_vm_ops_lock);
     }
