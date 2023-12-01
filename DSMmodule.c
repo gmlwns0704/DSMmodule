@@ -117,7 +117,7 @@ static void dsm_msg_handle_finish(void);
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf);
 static int dsm_mmap(struct file* fp, struct vm_area_struct* vma);
-static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write);
+// static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write);
 
 //모듈 상태
 static bool mod_ready = 0;
