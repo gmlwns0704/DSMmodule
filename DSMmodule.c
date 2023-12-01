@@ -858,7 +858,6 @@ static int __init dsm_init(void)
     dsm_shmem_aops.writepage = dsm_shmem_writepage;
 
     //dsm_shmem_fops, dsm_vm_ops 설정, shmem_file_operations, shmem_vm_ops의 포인터를 얻고 memcpy해야함
-    shmem_file_operations_ptr = 
 
     //디바이스 파일 생성
     //register_chrdev(DEV_MAJOR, DEV_NAME, &fops);
