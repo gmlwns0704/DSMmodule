@@ -114,6 +114,9 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 static int dsm_msg_handle_request_pg(int id);
 static void dsm_msg_handle_finish(void);
 
+static vm_fault_t dsm_fault(struct vm_fault* vmf);
+static int dsm_mmap(struct file* fp, struct vm_area_struct* vma);
+
 //모듈 상태
 static bool mod_ready = 0;
 //디바이스
@@ -137,13 +140,13 @@ static int nodnum = 0;
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
 //mm/shmem.c shmem_file_operations 포인터, static이므로 포인터를 통한 참조
-DEFINE_SPINLOCK(shmem_file_operations_ptr_lock);
-const struct file_operations* shmem_file_operations_ptr = NULL;
+DEFINE_SPINLOCK(shmem_file_operations_lock);
+struct file_operations* shmem_file_operations_ptr = NULL;
 //dsm매핑 파일을 위한 file operations
 struct file_operations dsm_shmem_file_operations;
 //mm/shmem.c shmem_vm_ops 포인터, static이므로 포인터를 통한 참조
-DEFINE_SPINLOCK(shmem_vm_ops_ptr);
-const struct vm_operations_struct* shmem_vm_ops_ptr = NULL;
+DEFINE_SPINLOCK(shmem_vm_ops_lock);
+struct vm_operations_struct* shmem_vm_ops_ptr = NULL;
 //dsm_shmem_fops->mmap내부에서 vma의 vm_ops를 수정하기 위함, 이는 dsm_fault를 사용하기위함
 struct vm_operations_struct dsm_shmem_vm_ops;
 
@@ -287,7 +290,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         spin_lock(&shmem_file_operations_lock);
         if(!shmem_file_operations_ptr){
             //원본 포인터 저장
-            shmem_file_operations_ptr = fp->f_ops;
+            shmem_file_operations_ptr = fp->f_op;
             //복사, 나머지 operations는 원본 그대로
             memcpy(&dsm_shmem_file_operations, shmem_file_operations_ptr, sizeof(*shmem_file_operations_ptr));
             //fault함수 설정
@@ -821,7 +824,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
     return shmem_file_operations_ptr->mmap(fp, vma);
 }
 
-static vm_fault_t dsm_fault(struct vm_fault vmf){
+static vm_fault_t dsm_fault(struct vm_fault* vmf){
     int orig_ret = shmem_vm_ops_ptr->fault(vmf);
     struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
     if(dsmpg)
