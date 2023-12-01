@@ -810,7 +810,7 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
     orig_ret = shmem_vm_ops_ptr->fault(vmf);
     vmf->vma->vm_flags &= ~VM_WRITE;
 
-    dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode)
+    dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
     printk("custom dsm_fault occured\n");
     if(dsmpg)
         dsm_msg_update_pg(dsmpg);
