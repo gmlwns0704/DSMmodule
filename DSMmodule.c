@@ -289,6 +289,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     if(!shmem_file_operations_ptr){
         spin_lock(&shmem_file_operations_lock);
         if(!shmem_file_operations_ptr){
+            printk("setting custom dsm_fops\n");
             //원본 포인터 저장
             shmem_file_operations_ptr = fp->f_op;
             //복사, 나머지 operations는 원본 그대로
@@ -299,6 +300,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         spin_unlock(&shmem_file_operations_lock);
     }
 
+    printk("setting custom dsm_fops to fp\n");
     //address_space의 a_ops를 커스텀 aops로 설정
     fp->f_mapping->a_ops = &dsm_shmem_aops;
     //fp->_fops을 dsm_fops로 변경
@@ -810,6 +812,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
     if(!shmem_vm_ops_ptr){
         spin_lock(&shmem_vm_ops_lock);
         if(!shmem_vm_ops_ptr){
+            printk("setting dsm_vm_ops\n");
             //원본 포인터 저장
             shmem_vm_ops_ptr = vma->vm_ops;
             //복사, 나머지 operations는 원본 그대로
@@ -820,7 +823,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
         spin_unlock(&shmem_vm_ops_lock);
     }
     //dsm_fault가 할당된 operations
-    printk("setting dsm_vm_ops\n");
+    printk("setting dsm_vm_ops to vma\n");
     vma->vm_ops = &dsm_shmem_vm_ops;
     return shmem_file_operations_ptr->mmap(fp, vma);
 }
