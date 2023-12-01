@@ -820,6 +820,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
         spin_unlock(&shmem_vm_ops_lock);
     }
     //dsm_fault가 할당된 operations
+    printk("setting dsm_vm_ops\n");
     vma->vm_ops = &dsm_shmem_vm_ops;
     return shmem_file_operations_ptr->mmap(fp, vma);
 }
@@ -827,6 +828,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
 static vm_fault_t dsm_fault(struct vm_fault* vmf){
     int orig_ret = shmem_vm_ops_ptr->fault(vmf);
     struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
+    printk("custom dsm_fault occured\n");
     if(dsmpg)
         dsm_msg_update_pg(dsmpg);
     else
