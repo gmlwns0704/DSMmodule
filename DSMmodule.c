@@ -49,7 +49,8 @@ static enum msg_type{
     DSM_UPDATE_PG2, //페이지 전체를 전송하지 않고 수정할 부분만 전송
     DSM_REMOVE_PG,
     DSM_REQUEST_PG,
-    DSM_FINISH
+    DSM_FINISH,
+    DSM_SYNC_PG //peer와 비교하여 페이지 동기화
 };
 
 /*
@@ -150,23 +151,13 @@ DEFINE_SPINLOCK(shmem_vm_ops_lock);
 struct vm_operations_struct* shmem_vm_ops_ptr = NULL;
 //dsm_shmem_fops->mmap내부에서 vma의 vm_ops를 수정하기 위함, 이는 dsm_fault를 사용하기위함
 struct vm_operations_struct dsm_shmem_vm_ops;
-//실제 phys메모리에 접근
-extern int generic_access_phys(struct vm_area_struct *vma, unsigned long addr, void *buf, int len, int write);
+// //실제 phys메모리에 접근
+// extern int generic_access_phys(struct vm_area_struct *vma, unsigned long addr, void *buf, int len, int write);
 
 //arguments
 //charp: char*
 module_param(dsm_ip_addr, charp, 0600);
 module_param(dsm_port, int, 0600);
-
-//ioctl로 open될 파일의 operations
-// struct file_operations map_fops = {
-//     .mmap = dsm_mmap
-// };
-
-//dsm_mmap으로 mmap될 vm_area_struct의 operations
-// struct vm_operations_struct dsm_vma_ops = {
-//     .fault = dsm_vma_fault
-// };
 
 //페이지 정보 링크드 리스트
 
@@ -404,30 +395,6 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
     return 0;
 }
 
-//va_area_struct 관련
-/*
-static vm_fault_t dsm_vma_fault(struct vm_fault* vmf){
-    //fault 발생시(vm접근시) 발생할 일
-    //물리 메모리에 접근하는 대신 peer_sock으로부터 데이터 받아오기
-    //or peer로부터 페이지 정보를 받고 페이지 할당 후 반영?
-    struct page* page;
-    void* pg_ptr;
-    unsigned int offset;
-
-    page = follow_page(vma, vma->address, FOLL_WRITE|FOLL_FORCE);
-
-    //최종적으로 할당할 page를 리턴해야함
-    return page;
-}
-
-static int dsm_mmap(struct file* file, struct vm_area_struct vma){
-    //파일에 mmap수행시 일어날 일 정의
-    vma->vm_ops = &dsm_vma_ops;
-    //해당 페이지 쓰기불가, 페이지에 write을 시도할 때 마다 page_fault가 발생한다.
-    vma->vm_flags &= ~VM_WRITE;
-    vma->vm_flags |= VM_DENYWRITE;
-}
-*/
 //소켓 통신
 
 static int dsm_srv(int port){
@@ -787,7 +754,7 @@ static void dsm_msg_handle_finish(void){
 }
 
 //address spcae aops
-
+//주로 fsync로 호출됨
 static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc){
     struct folio *folio = page_folio(page);
 	struct address_space *mapping = folio->mapping;
@@ -829,12 +796,21 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
     //dsm_fault가 할당된 operations
     printk("setting dsm_vm_ops to vma\n");
     vma->vm_ops = &dsm_shmem_vm_ops;
+    //write금지, fault를 강제함
+    vma->vm_flags &= ~VM_WRITE;
     return shmem_file_operations_ptr->mmap(fp, vma);
 }
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf){
-    int orig_ret = shmem_vm_ops_ptr->fault(vmf);
-    struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
+    int orig_ret;
+    struct DSMpg_info* dsmpg;
+
+    //임시로 권한 허용, 원본 fault가 성공하게함
+    vmf->vma->vm_flags |= VM_WRITE;
+    orig_ret = shmem_vm_ops_ptr->fault(vmf);
+    vmf->vma->vm_flags &= ~VM_WRITE;
+
+    dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode)
     printk("custom dsm_fault occured\n");
     if(dsmpg)
         dsm_msg_update_pg(dsmpg);
@@ -843,17 +819,17 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
     return orig_ret;
 }
 
-//매핑된 실제 물리 메모리에 접근할 때 작동
-static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write){
-    int orig_ret = generic_access_phys(vma, addr, buf, len, write);
-    struct DSMpg_info* dsmpg = list_find_by_inode(vma->vm_file->f_inode);
-    printk("custom dsm_fault occured\n");
-    if(dsmpg)
-        dsm_msg_update_pg(dsmpg);
-    else
-        printk("dsm_fault occured but inode is invalid\n");
-    return orig_ret;
-}
+// //매핑된 실제 물리 메모리에 접근할 때 작동
+// static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write){
+//     int orig_ret = generic_access_phys(vma, addr, buf, len, write);
+//     struct DSMpg_info* dsmpg = list_find_by_inode(vma->vm_file->f_inode);
+//     printk("custom dsm_access_phys occured\n");
+//     if(!orig_ret && dsmpg)
+//         dsm_msg_update_pg(dsmpg);
+//     else
+//         printk("dsm_access_phys occured but failed\n");
+//     return orig_ret;
+// }
 
 struct file_operations fops = {
     .owner = THIS_MODULE,
