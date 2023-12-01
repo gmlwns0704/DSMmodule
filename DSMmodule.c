@@ -808,6 +808,7 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
     //임시로 권한 허용, 원본 fault가 성공하게함
     vmf->vma->vm_flags |= VM_WRITE;
     orig_ret = shmem_vm_ops_ptr->fault(vmf);
+    printk("orig_ret %d\n", orig_ret);
     vmf->vma->vm_flags &= ~VM_WRITE;
 
     dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
