@@ -846,7 +846,7 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
 //매핑된 실제 물리 메모리에 접근할 때 작동
 static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write){
     int orig_ret = generic_access_phys(vma, addr, buf, len, write);
-    struct DSMpg_info* dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
+    struct DSMpg_info* dsmpg = list_find_by_inode(vma->vm_file->f_inode);
     printk("custom dsm_fault occured\n");
     if(dsmpg)
         dsm_msg_update_pg(dsmpg);
