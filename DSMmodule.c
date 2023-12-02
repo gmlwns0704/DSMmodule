@@ -138,6 +138,7 @@ int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
+static struct task_struct* file_chk_thread = NULL;
 DEFINE_SPINLOCK(list_lock);
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
@@ -334,7 +335,7 @@ static int dsm_file_chk_thread(void* arg){
     struct DSMpg_info* node;
     struct timespec64 last_modified;
     struct timespec64* target_modified;
-    ktime_get_read_ts64(&last_modified);
+    ktime_get_real_ts64(&last_modified);
     while(mod_ready){
         node = head;
         spin_lock(&list_lock);
@@ -926,6 +927,13 @@ static int __init dsm_init(void)
 
     printk("DSM init socket done\n");
 
+    printk("DSM init file_chk_thread\n");
+    file_chk_thread = kthread_run(dsm_file_chk_thread, NULL, "dsm_file_chk_thread");
+    if(IS_ERR(file_chk_thread)){
+        err = -1;
+        printk("file_chk_thread failed\n");
+        goto failed;
+    }
     printk("DSM init recv_thread\n");
     recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
     if(IS_ERR(recv_thread)){
@@ -962,6 +970,7 @@ static void __exit dsm_exit(void)
     printk("remove device stop\n");
     //recv스레드 종료
     mod_ready = 0;
+    kthread_stop(dsm_file_chk_thread);
     kthread_stop(recv_thread);
     printk("recv_thread stop\n");
     //소켓 종료
