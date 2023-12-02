@@ -39,9 +39,9 @@ int main(int argc, char** argv){
         perror("mmap");
     printf("print ptr: %p\n", ptr);
     *((int*)ptr) = atoi(argv[2]);
-    printf("start force update\n");
-    if(ioctl(mod, DSM_IOCTL_FORCE_UPDATE, &dsmpg) < 0)
-        perror("ioctl");
+    // printf("start force update\n");
+    // if(ioctl(mod, DSM_IOCTL_FORCE_UPDATE, &dsmpg) < 0)
+    //     perror("ioctl");
     printf("start close\n");
     close(dsmpg.dsmpg_fd);
     close(mod);

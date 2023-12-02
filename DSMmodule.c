@@ -138,6 +138,7 @@ int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
+DEFINE_SPINLOCK(list_lock);
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
@@ -325,6 +326,30 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
     ret = list_insert(id, sz, fp);
     filp_close(fp, NULL);
     return ret;
+}
+
+// mapfile_check
+
+static int dsm_file_chk_thread(void* arg){
+    struct DSMpg_info* node;
+    struct timespec64 last_modified;
+    struct timespec64* target_modified;
+    ktime_get_read_ts64(&last_modified);
+    while(mod_ready){
+        node = head;
+        spin_lock(&list_lock);
+        while(node){
+            target_modified = &node->inode->i_mtime;
+            if(target_modified->tv_sec > last_modified.tv_sec){
+                last_modified = *target_modified;
+                dsm_msg_update_pg(list_find_by_inode(node->inode));
+            }
+            node = node->next;
+        }
+        spin_unlock(&list_lock);
+    }
+
+    return 0;
 }
 
 //커널 기능
@@ -797,7 +822,7 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
     printk("setting dsm_vm_ops to vma\n");
     vma->vm_ops = &dsm_shmem_vm_ops;
     //write금지, fault를 강제함
-    vma->vm_flags &= ~VM_WRITE;
+    // vma->vm_flags &= ~VM_WRITE;
     return shmem_file_operations_ptr->mmap(fp, vma);
 }
 
@@ -806,10 +831,10 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
     struct DSMpg_info* dsmpg;
 
     //임시로 권한 허용, 원본 fault가 성공하게함
-    vmf->vma->vm_flags |= VM_WRITE;
+    // vmf->vma->vm_flags |= VM_WRITE;
     orig_ret = shmem_vm_ops_ptr->fault(vmf);
     printk("orig_ret %d\n", orig_ret);
-    vmf->vma->vm_flags &= ~VM_WRITE;
+    // vmf->vma->vm_flags &= ~VM_WRITE;
 
     dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
     printk("custom dsm_fault occured\n");
