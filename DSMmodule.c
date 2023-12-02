@@ -970,7 +970,7 @@ static void __exit dsm_exit(void)
     printk("remove device stop\n");
     //recv스레드 종료
     mod_ready = 0;
-    kthread_stop(dsm_file_chk_thread);
+    kthread_stop(file_chk_thread);
     kthread_stop(recv_thread);
     printk("recv_thread stop\n");
     //소켓 종료
