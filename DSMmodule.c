@@ -33,6 +33,10 @@
 
 //동기화
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
+
+//타이머
+#include <linux/timer.h>
 
 
 #define DEV_NAME "DSMmodule"
@@ -109,15 +113,19 @@ static int dsm_msg_new_pg(int id, unsigned int sz);
 static int dsm_msg_update_pg(struct DSMpg_info* dsmpg);
 static int dsm_msg_request_pg(int id);
 static void dsm_msg_finish(void);
+static int dsm_msg_sync_pg(int id);
 
 static int dsm_msg_handle_new_pg(int id, unsigned int sz);
 static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data);
 static int dsm_msg_handle_request_pg(int id);
 static void dsm_msg_handle_finish(void);
+static int dsm_msg_handle_sync_pg(int id, struct timespec64* tm);
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf);
 static int dsm_mmap(struct file* fp, struct vm_area_struct* vma);
 // static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write);
+
+static void dsm_exit_protocol(void)
 
 //모듈 상태
 static bool mod_ready = 0;
@@ -138,8 +146,11 @@ int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
-static struct task_struct* file_chk_thread = NULL;
-DEFINE_SPINLOCK(list_lock);
+static struct timespec64 last_modified;
+//타이머
+static struct timer_list file_chk_timer;
+extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data jiffies;
+DEFINE_MUTEX(list_lock);
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
@@ -168,19 +179,23 @@ module_param(dsm_port, int, 0600);
 */
 static struct DSMpg_info* list_find(int input_id){
     struct DSMpg_info* node = head;
+    mutex_lock(&list_lock);
     if(!head || head->id == input_id)
         return head;
     while(node->next && node->next->id != input_id)
         node = node->next;
+    mutex_unlock(&list_lock);
     return node->next;
 }
 
 static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
     struct DSMpg_info* node = head;
+    mutex_lock(&list_lcok);
     if(!head || head->inode == inode)
         return head;
     while(node->next && node->next->inode != inode)
         node = node->next;
+    mutex_unlock(&list_lock);
     return node->next;
 }
 
@@ -191,24 +206,29 @@ static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
 static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struct file* fp){
     struct DSMpg_info* node = head;
     struct DSMpg_info* new = kvmalloc(sizeof(struct DSMpg_info), GFP_KERNEL);
+    mutex_lock(&list_lock);
     if(IS_ERR(new))
-        return NULL;
+        goto failed;
     new->next = NULL;
     new->id = input_id;
     new->sz = input_sz;
     new->inode = fp->f_inode;
     if(!head){
         head = new;
-        nodnum++;
-        return new;
+        goto success;
     }
 
     while(node->next)
         node = node->next;
     node->next = new;
-    nodnum++;
 
+success:
+    nodnum++;
+    mutex_unlock(&list_lock);
     return new;
+failed:
+    mutex_unlock(&list_lock);
+    return NULL;
 }
 
 /*
@@ -217,13 +237,13 @@ static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struc
 static int list_remove(int input_id){
     struct DSMpg_info* node = head;
     struct DSMpg_info* target;
+    mutex_lock(&list_lock);
     if(!head)
-        return -1;
+        goto failed;
     if(head->id == input_id){
-        kvfree(head);
-        head = NULL;
-        nodnum--;
-        return 0;
+        target = head;
+        head = head->next;
+        goto success;
     }
     
     while(node->next && node->next->id != input_id)
@@ -231,12 +251,16 @@ static int list_remove(int input_id){
     target = node->next;
     
     if(!target)
-        return -1;
+        goto failed;
 
-    node->next = target->next;
+success:
     kvfree(target);
     nodnum--;
+    mutex_unlock(&list_lock);
     return 0;
+failed:
+    mutex_unlock(&list_lock);
+    return -1;
 }
 
 /*
@@ -244,12 +268,14 @@ static int list_remove(int input_id){
 */
 static int list_reset(void){
     struct DSMpg_info* next_head;
+    mutex_lock(&list_lock);
     while(head){
         next_head = head->next;
         kvfree(head);
         head = next_head;
     }
     nodnum = 0;
+    mutex_unlock(&list_lock);
     return 0;
 }
 
@@ -331,29 +357,24 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 
 // mapfile_check
 
-static int dsm_file_chk_thread(void* arg){
+static int dsm_file_chk(void* arg){
     struct DSMpg_info* node;
-    struct timespec64 last_modified;
     struct timespec64* target_modified;
-    ktime_get_real_ts64(&last_modified);
-    while(mod_ready){
-        node = head;
-        spin_lock(&list_lock);
-        while(node){
-            target_modified = &node->inode->i_mtime;
-            if(target_modified->tv_sec > last_modified.tv_sec){
-                last_modified = *target_modified;
-                dsm_msg_update_pg(list_find_by_inode(node->inode));
-            }
-            node = node->next;
+    node = head;
+    mutex_lock(&list_lock);
+    while(node){
+        target_modified = &node->inode->i_mtime;
+        if(target_modified->tv_sec > last_modified.tv_sec){
+            last_modified = *target_modified;
+            dsm_msg_update_pg(list_find_by_inode(node->inode));
         }
-        spin_unlock(&list_lock);
+        node = node->next;
     }
+    mutex_unlock(&list_lock);
+    mod_timer(&file_chk_timer, jiffies + msec_to_jiffies(100));
 
     return 0;
 }
-
-//커널 기능
 
 //유저 기능 호출
 
@@ -497,9 +518,6 @@ static int dsm_srv(int port){
         kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
         node = node->next;
     }
-
-    printk("DSM mod ready\n");
-    mod_ready = true;
     return 0;
 }
 
@@ -557,9 +575,6 @@ static int dsm_connect(const char* ip, int port){
         /*loop 종료 조건*/
         new_map_file(node_buf.id, node_buf.sz);
     }
-
-    printk("DSM mod ready\n");
-    mod_ready = true;
     return 0;
 }
 
@@ -571,6 +586,7 @@ static int dsm_recv_thread(void* arg){
     struct msg_header header;
     struct DSMpg_info* dsmpg;
     void* buf;
+    struct timespec64 tm_buf;
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = (struct sockaddr*)peer_sock;
@@ -617,6 +633,16 @@ static int dsm_recv_thread(void* arg){
                 dsm_msg_handle_request_pg(header.id);
             break;
             case DSM_REMOVE_PG:
+            break;
+            case DSM_SYNC_PG:
+                if(!list_find(header.id)){
+                    printk("DSM_SYNC_PG to non exist id %d, ignored\n", header.id);
+                    break;   
+                }
+                iv.iov_base = &tm_buf;
+                iv.iov_len = sizeof(tm_buf);
+                kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
+                dsm_msg_handle_sync_pg(header.id, &tm_buf);
             break;
             default:
                 printk("unknown msg type\n");
@@ -735,6 +761,31 @@ static void dsm_msg_finish(void){
     kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
 }
 
+static int dsm_msg_sync_pg(int id){
+    struct msghdr msg;
+    struct kvec iv;
+    struct timespec64 tm;
+    char msg_buf[32];
+    int offset = 0;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (struct sockaddr*)peer_sock;
+    msg.msg_namelen = sizeof(*peer_sock);
+
+    ((struct msg_header*)(msg_buf + offset))->type = DSM_SYNC_PG;
+    ((struct msg_header*)(msg_buf + offset))->id = id;
+    offset += sizeof(struct msg_header);
+
+    tm = list_find(id)->inode->i_mtime;
+    memcpy(msg_buf, &tm, sizeof(tm));
+    offset += sizeof(tm);
+
+    iv.iov_base = msg_buf;
+    iv.iov_len = sizeof(offset);
+    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
+    return 0;
+}
+
 //메시지 recv관련
 
 static int dsm_msg_handle_new_pg(int id, unsigned int sz){
@@ -776,7 +827,20 @@ static int dsm_msg_handle_request_pg(int id){
 }
 
 static void dsm_msg_handle_finish(void){
-    list_reset();
+    dsm_exit_protocol();
+    module_put(THIS_MODULE);
+}
+
+static int dsm_msg_handle_sync_pg(int id, struct timespec64* tm){
+    struct DSMpg_info* dsmpg;
+    dsmpg = list_find(id);
+    if(tm->tv_sec > dsmpg->inode->i_mtime->tv_sec){
+        dsm_msg_request_pg(id);
+    }
+    else{
+        dsm_msg_update_pg(dsmpg);
+    }
+    return 0;
 }
 
 //address spcae aops
@@ -925,15 +989,11 @@ static int __init dsm_init(void)
             goto failed;
     }
 
-    printk("DSM init socket done\n");
+    printk("DSM init file_chk_timer\n");
+    ktime_get_real_ts64(&last_modified);
+    setup_timer(&file_chk_timer, dsm_file_chk, 0);
+    mod_timer(&file_chk_timer, jiffies + msec_to_jiffies(100));
 
-    printk("DSM init file_chk_thread\n");
-    file_chk_thread = kthread_run(dsm_file_chk_thread, NULL, "dsm_file_chk_thread");
-    if(IS_ERR(file_chk_thread)){
-        err = -1;
-        printk("file_chk_thread failed\n");
-        goto failed;
-    }
     printk("DSM init recv_thread\n");
     recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
     if(IS_ERR(recv_thread)){
@@ -944,7 +1004,7 @@ static int __init dsm_init(void)
     printk("DSM init recv_thread done\n");
 
     printk("DSM init done\n");
-
+    mod_ready = 1;
     return 0;
 failed:
     if(dv_dst)
@@ -959,28 +1019,32 @@ failed:
     return -1;
 }
 
-static void __exit dsm_exit(void)
-{
-    int ret;
+//종료를 위한 사전작업
+static void dsm_exit_protocol(void){
+    //종료 메시지 전송
+    dsm_msg_finish();
+    printk("sent dsm_msg_finish\n");
+    //recv스레드 종료
+    mod_ready = 0;
+    kthread_stop(recv_thread);
+    printk("recv_thread stop\n");
+    //리스트 메모리 할당해제
+    list_reset();
+    //소켓 종료
+    peer_sock->ops->shutdown(peer_sock, 0);
+    my_sock->ops->shutdown(my_sock, 0);
+    printk("socket shutdown done\n");
     //디바이스 관련 종료
     device_destroy(dv_class, dv_dv);
     class_destroy(dv_class);
     cdev_del(&dv_cdv);
     unregister_chrdev_region(dv_dv, 1);
     printk("remove device stop\n");
-    //recv스레드 종료
-    mod_ready = 0;
-    kthread_stop(file_chk_thread);
-    kthread_stop(recv_thread);
-    printk("recv_thread stop\n");
-    //소켓 종료
-    ret = peer_sock->ops->shutdown(peer_sock, 0);
-    if(ret)
-        printk("peer_sock shutdown failed\n");
-    ret = my_sock->ops->shutdown(my_sock, 0);
-    if(ret)
-        printk("my_sock shutdown failed\n");
-    printk("socket shutdown done\n");
+}
+
+static void __exit dsm_exit(void)
+{
+    dsm_exit_protocol();
     printk("DSM exit!\n");
 }
 
