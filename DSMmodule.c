@@ -400,8 +400,9 @@ static void dsm_file_chk(struct timer_list *timer){
         node = node->next;
     }
 
-    // work_thread를 작동시키기 위해 언락
-    mutex_unlock(&file_chk_work_lock);
+    // 업데이트 목록이 있다면 work_thread를 작동시키기 위해 언락
+    if(update_list_num)
+        mutex_unlock(&file_chk_work_lock);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 }
 
@@ -409,7 +410,7 @@ static int dsm_file_chk_work_thread(void* arg){
     while(mod_ready){
         // 타이머 인터럽트로 언락될 때 까지 대기
         mutex_lock(&file_chk_work_lock);
-        printk("dsm_file_chk_thread runned for %d paged\n", update_list_num);
+        printk("dsm_file_chk_work_thread runned for %d paged\n", update_list_num);
         // 버퍼에서 하나씩 업데이트
         for(int i = 0; i < update_list_num; i++)
             dsm_msg_update_pg(update_list[i]);
