@@ -44,7 +44,7 @@ int main(int argc, char** argv){
         scanf("%c", &c);
         if(c == 'w'){
             printf("input value: ");
-            scanf("%d\n", (int*)ptr);
+            scanf("%d", (int*)ptr);
         }
         else if(c == 'r')
             printf("ptr: %d\n", *((int*)ptr));
