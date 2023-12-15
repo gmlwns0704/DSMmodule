@@ -41,7 +41,7 @@ int main(int argc, char** argv){
     char c;
     while(1){
         printf("(w:write, r:read, e:end): ");
-        scanf("%c\n", &c);
+        scanf("%c", &c);
         if(c == 'w'){
             printf("input value: ");
             scanf("%d\n", (int*)ptr);
