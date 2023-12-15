@@ -388,7 +388,8 @@ static void dsm_file_chk(struct timer_list *timer){
         target_last_modified = &node->last_modified;
         // last_modified 이후로 수정이 있었다면
         if(target_modified->tv_sec > target_last_modified->tv_sec ||
-        (target_modified->tv_sec == target_last_modified->tv_sec && target_modified->tv_nsec > target_last_modified->tv_nsec)){
+        (target_modified->tv_sec == target_last_modified->tv_sec &&
+        target_modified->tv_nsec > target_last_modified->tv_nsec)){
             // dsm_msg_update_pg는 내부에서 kvmalloc을 호출하므로 직접 호출하면 안됨
             // 인터럽트 종료 후 해당 기능을 수행하려면?
             /*
@@ -818,6 +819,8 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
         return -1;
     }
     kernel_write(fp, data, dsmpg->sz, fp->f_pos);
+    //last_modified 수정
+    dsmpg->last_modified = fp->f_inode->i_mtime;
     filp_close(fp, NULL);
     return 0;
 }
