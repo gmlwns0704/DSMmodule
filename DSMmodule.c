@@ -399,13 +399,14 @@ static void dsm_file_chk(struct timer_list *timer){
             *target_last_modified = *target_modified;
             //버퍼에 추가
             update_list[update_list_num] = node;
+            printk("added page %d to updated list\n", node->id);
             update_list_num++;
         }
         node = node->next;
     }
 
     // 업데이트 목록이 있다면 work_thread를 작동시키기 위해 언락
-    if(update_list_num)
+    if(update_list_num > 0)
         mutex_unlock(&file_chk_work_lock);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 }
@@ -984,6 +985,8 @@ static int __init dsm_init(void)
             goto failed;
     }
 
+    mod_ready = 1;
+
     printk("DSM init file_chk_timer\n");
     timer_setup(&file_chk_timer, dsm_file_chk, 0);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
@@ -996,8 +999,15 @@ static int __init dsm_init(void)
         goto failed;
     }
 
+    printk("DSM init recv_thread\n");
+    recv_thread = kthread_run(dsm_recv_thread, NULL, "recv_thread");
+    if(IS_ERR(recv_thread)){
+        err = -1;
+        printk("kthread_tun failed\n");
+        goto failed;
+    }
+
     printk("DSM init done\n");
-    mod_ready = 1;
     return 0;
 failed:
     if(dv_dst)
