@@ -155,7 +155,7 @@ static struct timer_list file_chk_timer;
 //현재시간 jiffies
 extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data jiffies;
 DEFINE_SPINLOCK(list_lock);
-DEFINE_MUTEXLOCK(file_chk_work_lock); //해당 락은 타이머 인터럽트에 의해 unlock되었을 때만 스레드를 작동하게함
+DEFINE_MUTEX(file_chk_work_lock); //해당 락은 타이머 인터럽트에 의해 unlock되었을 때만 스레드를 작동하게함
 static struct DSMpg_info* update_list[UPDATE_BUF_NUM]; //타이머 인터럽트에서 update대상 노드들을 추가하면 work스레드에서 실제 업데이트 수행
 static int update_list_num = 0;
 //DSM mappage파일을 위한 a_ops
@@ -381,7 +381,7 @@ static void dsm_file_chk(struct timer_list *timer){
         if(update_list_num >= UPDATE_BUF_NUM)
             break;
         target_modified = &node->inode->i_mtime;
-        target_last_modified = node->last_modified;
+        target_last_modified = &node->last_modified;
         if(target_modified->tv_sec > target_last_modified->tv_sec){
             // dsm_msg_update_pg는 내부에서 kvmalloc을 호출하므로 직접 호출하면 안됨
             // 인터럽트 종료 후 해당 기능을 수행하려면?
@@ -1017,7 +1017,7 @@ static void dsm_exit_protocol(void){
     //mod_ready = 0, 각종 스레드들 종료
     mod_ready = 0;
     //file_chk_work스레드 종료
-    mutex_unlock(file_chk_work_lock);
+    mutex_unlock(&file_chk_work_lock);
     kthread_stop(file_chk_work_thread);
     printk("file_chk_work_thread stop\n");
     //recv스레드 종료
