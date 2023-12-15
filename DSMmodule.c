@@ -361,18 +361,17 @@ static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     node = head;
-    //인터럽트에서는 락 사용 취소
-    // spin_lock(&list_lock);
+    spin_lock(&list_lock);
     while(node){
         target_modified = &node->inode->i_mtime;
         if(target_modified->tv_sec > last_modified.tv_sec){
             last_modified = *target_modified;
-            dsm_msg_update_pg(list_find_by_inode(node->inode));
+            dsm_msg_update_pg(node);
         }
         node = node->next;
     }
-    // spin_unlock(&list_lock);
-    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
+    spin_unlock(&list_lock);
+    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(300));
 }
 
 //유저 기능 호출
