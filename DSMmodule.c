@@ -46,6 +46,7 @@
 #define DSM_IOCTL_GET_UPDATE 2
 
 #define DSM_MAX_PAGE_NUM 32
+#define UPDATE_BUF_NUM 32
 
 static enum msg_type{
     DSM_NEW_PG = 0,
@@ -83,7 +84,8 @@ struct DSMpg{
 // 모듈에서 참조하는 링크드 리스트
 struct DSMpg_info{
     struct DSMpg_info* next;
-    struct inode* inode;
+    struct inode* inode; //해당 페이지의 매핑 파일 inode
+    struct timespec64 last_modified; //해당 페이지의 마지막 수정시간
     int id;
     unsigned int sz;
 };
@@ -105,6 +107,7 @@ static int list_reset(void);
 static int new_map_fd_install(struct DSMpg* dsmpg);
 static struct DSMpg_info* new_map_file(int id, unsigned int sz);
 static void dsm_file_chk(struct timer_list *timer);
+static int dsm_file_chk_work_thread(void* arg);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
@@ -140,17 +143,21 @@ static struct sockaddr_in peer_addr;
 static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
 static struct task_struct* recv_thread = NULL;
+static struct task_struct* file_chk_work_thread = NULL;
 //args
 char* dsm_ip_addr;
 int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
 static int nodnum = 0;
-static struct timespec64 last_modified;
 //타이머
 static struct timer_list file_chk_timer;
+//현재시간 jiffies
 extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data jiffies;
-DEFINE_SPINLOCK(list_lock); //해당 락은 타이머 인터럽트에서도 사용되므로 반드시 spinlock을 써야함(mutex쓰면 고장남)
+DEFINE_SPINLOCK(list_lock);
+DEFINE_MUTEXLOCK(file_chk_work_lock); //해당 락은 타이머 인터럽트에 의해 unlock되었을 때만 스레드를 작동하게함
+static struct DSMpg_info* update_list[UPDATE_BUF_NUM]; //타이머 인터럽트에서 update대상 노드들을 추가하면 work스레드에서 실제 업데이트 수행
+static int update_list_num = 0;
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
@@ -213,6 +220,7 @@ static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struc
     new->id = input_id;
     new->sz = input_sz;
     new->inode = fp->f_inode;
+    ktime_get_real_ts64(&new->last_modified);
     if(!head){
         head = new;
         goto success;
@@ -357,21 +365,58 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 
 // mapfile_check
 
+// 타이머 인터럽트로 인해 호출됨, sleep, lock, kvmalloc등 sleep을 야기하는 기능은 금지됨
 static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
+    struct timespec64* target_last_modified;
+    //lock상태라면 스킵
+    if(spin_is_locked(&list_lock)){
+        mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
+        return;
+    }
     node = head;
-    spin_lock(&list_lock);
     while(node){
+        //버퍼가 가득차면 스킵
+        if(update_list_num >= UPDATE_BUF_NUM)
+            break;
         target_modified = &node->inode->i_mtime;
-        if(target_modified->tv_sec > last_modified.tv_sec){
-            last_modified = *target_modified;
-            dsm_msg_update_pg(node);
+        target_last_modified = node->last_modified;
+        if(target_modified->tv_sec > target_last_modified->tv_sec){
+            // dsm_msg_update_pg는 내부에서 kvmalloc을 호출하므로 직접 호출하면 안됨
+            // 인터럽트 종료 후 해당 기능을 수행하려면?
+            /*
+            1. 타겟 노드를 큐에 넣는다.
+            2. 인터럽트 종료 후 해당 노드에 대해 update_pg수행
+            3. 해당 작업을 수행하는 스레드는 인터럽트에 의해서만 unlock됨
+            */
+            // dsm_msg_update_pg(node);
+            //업데이트 시간 수정
+            *target_last_modified = *target_modified;
+            //버퍼에 추가
+            update_list[update_list_num] = node;
+            update_list_num++;
         }
         node = node->next;
     }
-    spin_unlock(&list_lock);
-    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(300));
+
+    // work_thread를 작동시키기 위해 언락
+    mutex_unlock(&file_chk_work_lock);
+    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
+}
+
+static int dsm_file_chk_work_thread(void* arg){
+    while(mod_ready){
+        // 타이머 인터럽트로 언락될 때 까지 대기
+        mutex_lock(&file_chk_work_lock);
+        printk("dsm_file_chk_thread runned for %d paged\n", update_list_num);
+        // 버퍼에서 하나씩 업데이트
+        for(int i = 0; i < update_list_num; i++)
+            dsm_msg_update_pg(update_list[i]);
+        //버퍼 데이터 갯수 초기화
+        update_list_num = 0;
+    }
+    return 0;
 }
 
 //유저 기능 호출
@@ -935,18 +980,18 @@ static int __init dsm_init(void)
     }
 
     printk("DSM init file_chk_timer\n");
-    ktime_get_real_ts64(&last_modified);
     timer_setup(&file_chk_timer, dsm_file_chk, 0);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 
-    printk("DSM init recv_thread\n");
-    recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
-    if(IS_ERR(recv_thread)){
+    printk("DSM init file_chk_timer\n");
+
+    printk("DSM init file_chk_work_thread\n");
+    file_chk_work_thread = kthread_run(dsm_file_chk_work_thread, NULL, "dsm_file_chk_work_thread");
+    if(IS_ERR(file_chk_work_thread)){
         err = -1;
         printk("kthread_tun failed\n");
         goto failed;
     }
-    printk("DSM init rinitreecv_thread done\n");
 
     printk("DSM init done\n");
     mod_ready = 1;
@@ -969,8 +1014,13 @@ static void dsm_exit_protocol(void){
     //종료 메시지 전송
     dsm_msg_finish();
     printk("sent dsm_msg_finish\n");
-    //recv스레드 종료
+    //mod_ready = 0, 각종 스레드들 종료
     mod_ready = 0;
+    //file_chk_work스레드 종료
+    mutex_unlock(file_chk_work_lock);
+    kthread_stop(file_chk_work_thread);
+    printk("file_chk_work_thread stop\n");
+    //recv스레드 종료
     kthread_stop(recv_thread);
     printk("recv_thread stop\n");
     //리스트 메모리 할당해제
