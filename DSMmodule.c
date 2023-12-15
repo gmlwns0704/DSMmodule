@@ -357,7 +357,7 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 
 // mapfile_check
 
-static int dsm_file_chk(void* arg){
+static void dsm_file_chk(void* arg){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     node = head;
@@ -992,7 +992,7 @@ static int __init dsm_init(void)
     printk("DSM init file_chk_timer\n");
     ktime_get_real_ts64(&last_modified);
     timer_setup(&file_chk_timer, dsm_file_chk, 0);
-    mod_timer(&file_chk_timer, jiffies + msec_to_jiffies(100));
+    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 
     printk("DSM init recv_thread\n");
     recv_thread = kthread_run(dsm_recv_thread, NULL, "dsm_recv_thread");
