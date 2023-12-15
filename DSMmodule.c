@@ -644,6 +644,9 @@ static int dsm_recv_thread(void* arg){
                 kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
                 dsm_msg_handle_sync_pg(header.id, &tm_buf);
             break;
+            case DSM_FINISH:
+                dsm_exit_protocol();
+            break;
             default:
                 printk("unknown msg type\n");
             break;
@@ -1047,17 +1050,19 @@ static void dsm_exit_protocol(void){
     peer_sock->ops->shutdown(peer_sock, 0);
     my_sock->ops->shutdown(my_sock, 0);
     printk("socket shutdown done\n");
+}
+
+static void __exit dsm_exit(void)
+{
+    dsm_exit_protocol();
+    
     //디바이스 관련 종료
     device_destroy(dv_class, dv_dv);
     class_destroy(dv_class);
     cdev_del(&dv_cdv);
     unregister_chrdev_region(dv_dv, 1);
     printk("remove device stop\n");
-}
 
-static void __exit dsm_exit(void)
-{
-    dsm_exit_protocol();
     printk("DSM exit!\n");
 }
 
