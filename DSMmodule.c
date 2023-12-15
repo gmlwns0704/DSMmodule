@@ -373,8 +373,6 @@ static void dsm_file_chk(struct timer_list *timer){
     }
     mutex_unlock(&list_lock);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
-
-    return 0;
 }
 
 //유저 기능 호출
