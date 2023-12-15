@@ -150,7 +150,7 @@ static struct timespec64 last_modified;
 //타이머
 static struct timer_list file_chk_timer;
 extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data jiffies;
-DEFINE_MUTEX(list_lock);
+DEFINE_SPINLOCK(list_lock);
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
@@ -179,23 +179,23 @@ module_param(dsm_port, int, 0600);
 */
 static struct DSMpg_info* list_find(int input_id){
     struct DSMpg_info* node = head;
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     if(!head || head->id == input_id)
         return head;
     while(node->next && node->next->id != input_id)
         node = node->next;
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return node->next;
 }
 
 static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
     struct DSMpg_info* node = head;
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     if(!head || head->inode == inode)
         return head;
     while(node->next && node->next->inode != inode)
         node = node->next;
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return node->next;
 }
 
@@ -206,7 +206,7 @@ static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
 static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struct file* fp){
     struct DSMpg_info* node = head;
     struct DSMpg_info* new = kvmalloc(sizeof(struct DSMpg_info), GFP_KERNEL);
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     if(IS_ERR(new))
         goto failed;
     new->next = NULL;
@@ -224,10 +224,10 @@ static struct DSMpg_info* list_insert(int input_id, unsigned int input_sz, struc
 
 success:
     nodnum++;
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return new;
 failed:
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return NULL;
 }
 
@@ -237,7 +237,7 @@ failed:
 static int list_remove(int input_id){
     struct DSMpg_info* node = head;
     struct DSMpg_info* target;
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     if(!head)
         goto failed;
     if(head->id == input_id){
@@ -256,10 +256,10 @@ static int list_remove(int input_id){
 success:
     kvfree(target);
     nodnum--;
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return 0;
 failed:
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return -1;
 }
 
@@ -268,14 +268,14 @@ failed:
 */
 static int list_reset(void){
     struct DSMpg_info* next_head;
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     while(head){
         next_head = head->next;
         kvfree(head);
         head = next_head;
     }
     nodnum = 0;
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     return 0;
 }
 
@@ -361,7 +361,7 @@ static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     node = head;
-    mutex_lock(&list_lock);
+    spin_lock(&list_lock);
     while(node){
         target_modified = &node->inode->i_mtime;
         if(target_modified->tv_sec > last_modified.tv_sec){
@@ -370,7 +370,7 @@ static void dsm_file_chk(struct timer_list *timer){
         }
         node = node->next;
     }
-    mutex_unlock(&list_lock);
+    spin_unlock(&list_lock);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 }
 
@@ -442,9 +442,6 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
 
 static int dsm_srv(int port){
     //원본 커널 소스코드에서 발췌 (/net/socket.c)
-	struct msghdr msg;
-    struct kvec iv;
-    struct DSMpg_info* node;
     int ret;
 
 	/* Check the SOCK_* constants for consistency.  */
@@ -471,56 +468,10 @@ static int dsm_srv(int port){
         printk("bind failed %d\n", ret);
         return ret;
     }
-
-    printk("dsm_srv try listen\n");
-    ret = my_sock->ops->listen(my_sock, 5);
-    if(ret){
-        printk("listen failed %d\n", ret);
-        return ret;
-    }
-
-    printk("dsm_srv try sock_create (peer)\n");
-	ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
-	if (ret){
-        printk("sock_create failed %d\n", ret);
-        return ret;
-    }
-
-    printk("dsm_srv try accept(%p, %p, 0, true)\n", my_sock, peer_sock);
-    ret = my_sock->ops->accept(my_sock, peer_sock, 0, true);
-    if(ret){
-        printk("accept failed %d\n", ret);
-        return ret;
-    }
-
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_name = (struct sockaddr*)peer_sock;
-    msg.msg_namelen = sizeof(*peer_sock);
-
-    iv.iov_base = &nodnum;
-    iv.iov_len = sizeof(nodnum);
-
-    /*여기서 NULL pointer dereference 발생*/
-    printk("try kernel_sendmsg(%p, %p, %p, 1, %ld)\n", peer_sock, &msg, &iv, iv.iov_len);
-    printk("&msg->msg_iter: %p\n", &msg.msg_iter);
-    kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
-
-    printk("dsm_srv start send nodes\n");
-    node = head;
-    while(node){
-        iv.iov_base = node;
-        iv.iov_len = sizeof(*node);
-
-        kernel_sendmsg(peer_sock, &msg, &iv, 1, iv.iov_len);
-        node = node->next;
-    }
     return 0;
 }
 
 static int dsm_connect(const char* ip, int port){
-    struct msghdr msg;
-    struct kvec iv;
-    struct DSMpg_info node_buf;
     unsigned char ip_bytes[4];
     int ret, i;
 
@@ -550,26 +501,6 @@ static int dsm_connect(const char* ip, int port){
     if(ret){
         printk("connect failed %d\n", ret);
         return ret;
-    }
-    
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_name = (struct sockaddr*)peer_sock;
-    msg.msg_namelen = sizeof(*peer_sock);
-
-    iv.iov_base = &nodnum;
-    iv.iov_len = sizeof(nodnum);
-    kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
-
-    iv.iov_base = &node_buf;
-    iv.iov_len = sizeof(node_buf);
-
-    // kernel_recvmsg(peer_sock, &msg, &iv, 1, /*크기*/, /*flags*/);
-    printk("start recv %d msg\n", nodnum);
-    for(i = 0; i < nodnum; i++){
-        kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
-        printk("recved (id:%d, sz:%d)", node_buf.id, node_buf.sz);
-        /*loop 종료 조건*/
-        new_map_file(node_buf.id, node_buf.sz);
     }
     return 0;
 }
