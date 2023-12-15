@@ -820,7 +820,9 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
     }
     kernel_write(fp, data, dsmpg->sz, fp->f_pos);
     //last_modified 수정
+    spin_lock(&list_lock);
     dsmpg->last_modified = fp->f_inode->i_mtime;
+    spin_unlock(&list_lock);
     filp_close(fp, NULL);
     return 0;
 }
