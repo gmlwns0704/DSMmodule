@@ -104,6 +104,7 @@ static int list_reset(void);
 
 static int new_map_fd_install(struct DSMpg* dsmpg);
 static struct DSMpg_info* new_map_file(int id, unsigned int sz);
+static void dsm_file_chk(struct timer_list *timer);
 
 static int dsm_srv(int port);
 static int dsm_connect(const char* ip, int port);
@@ -357,7 +358,7 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 
 // mapfile_check
 
-static void dsm_file_chk(void* arg){
+static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     node = head;
