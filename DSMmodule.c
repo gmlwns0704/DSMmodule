@@ -371,7 +371,7 @@ static int dsm_file_chk(void* arg){
         node = node->next;
     }
     mutex_unlock(&list_lock);
-    mod_timer(&file_chk_timer, jiffies + msec_to_jiffies(100));
+    mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 
     return 0;
 }
@@ -834,7 +834,7 @@ static void dsm_msg_handle_finish(void){
 static int dsm_msg_handle_sync_pg(int id, struct timespec64* tm){
     struct DSMpg_info* dsmpg;
     dsmpg = list_find(id);
-    if(tm->tv_sec > dsmpg->inode->i_mtime->tv_sec){
+    if(tm->tv_sec > dsmpg->inode->i_mtime.tv_sec){
         dsm_msg_request_pg(id);
     }
     else{
@@ -991,7 +991,7 @@ static int __init dsm_init(void)
 
     printk("DSM init file_chk_timer\n");
     ktime_get_real_ts64(&last_modified);
-    setup_timer(&file_chk_timer, dsm_file_chk, 0);
+    timer_setup(&file_chk_timer, dsm_file_chk, 0);
     mod_timer(&file_chk_timer, jiffies + msec_to_jiffies(100));
 
     printk("DSM init recv_thread\n");
