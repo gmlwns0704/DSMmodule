@@ -361,7 +361,8 @@ static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     node = head;
-    spin_lock(&list_lock);
+    //인터럽트에서는 락 사용 취소
+    // spin_lock(&list_lock);
     while(node){
         target_modified = &node->inode->i_mtime;
         if(target_modified->tv_sec > last_modified.tv_sec){
@@ -370,7 +371,7 @@ static void dsm_file_chk(struct timer_list *timer){
         }
         node = node->next;
     }
-    spin_unlock(&list_lock);
+    // spin_unlock(&list_lock);
     mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
 }
 
@@ -489,7 +490,7 @@ static int dsm_srv(int port){
         printk("accept failed %d\n", ret);
         return ret;
     }
-    
+
     return 0;
 }
 
