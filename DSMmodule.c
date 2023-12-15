@@ -376,6 +376,7 @@ static void dsm_file_chk(struct timer_list *timer){
         return;
     }
     node = head;
+    printk("dsm_file_chk timer callback interrupt worked\n");
     while(node){
         //버퍼가 가득차면 스킵
         if(update_list_num >= UPDATE_BUF_NUM)
@@ -410,7 +411,7 @@ static int dsm_file_chk_work_thread(void* arg){
     while(mod_ready){
         // 타이머 인터럽트로 언락될 때 까지 대기
         mutex_lock(&file_chk_work_lock);
-        printk("dsm_file_chk_work_thread runned for %d paged\n", update_list_num);
+        printk("dsm_file_chk_work_thread runned for %d pages\n", update_list_num);
         // 버퍼에서 하나씩 업데이트
         for(int i = 0; i < update_list_num; i++)
             dsm_msg_update_pg(update_list[i]);
@@ -436,7 +437,7 @@ static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
         return ret;
     }
 
-    // printk("ioctl cmd: %d\ndsmpg: id:%d fd:%d sz:%d\n", cmd, dsmpg.dsmpg_id, dsmpg.dsmpg_fd, dsmpg.dsmpg_sz);
+    printk("ioctl cmd: %d\ndsmpg: id:%d fd:%d sz:%d\n", cmd, dsmpg.dsmpg_id, dsmpg.dsmpg_fd, dsmpg.dsmpg_sz);
 
     switch(cmd){
         case DSM_IOCTL_GETFD:
