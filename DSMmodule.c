@@ -469,6 +469,13 @@ static int dsm_srv(int port){
         return ret;
     }
 
+    printk("dsm_srv try sock_create (peer)\n");
+	ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
+	if (ret){
+        printk("sock_create failed %d\n", ret);
+        return ret;
+    }
+
     ret = my_sock->ops->accept(my_sock, peer_sock, 0, 1);
     if(ret){
         printk("accept failed\n");
