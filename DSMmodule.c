@@ -386,7 +386,9 @@ static void dsm_file_chk(struct timer_list *timer){
             break;
         target_modified = &node->inode->i_mtime;
         target_last_modified = &node->last_modified;
-        if(target_modified->tv_sec > target_last_modified->tv_sec){
+        // last_modified 이후로 수정이 있었다면
+        if(target_modified->tv_sec > target_last_modified->tv_sec ||
+        (target_modified->tv_sec == target_last_modified->tv_sec && target_modified->tv_nsec > target_last_modified->tv_nsec)){
             // dsm_msg_update_pg는 내부에서 kvmalloc을 호출하므로 직접 호출하면 안됨
             // 인터럽트 종료 후 해당 기능을 수행하려면?
             /*
@@ -1024,11 +1026,14 @@ failed:
 
 //종료를 위한 사전작업
 static void dsm_exit_protocol(void){
+    //이미 mod_ready가 0이라면 스킵
+    if(!mod_ready)
+        return;
+    mod_ready = 0;
     //종료 메시지 전송
     dsm_msg_finish();
     printk("sent dsm_msg_finish\n");
     //mod_ready = 0, 각종 스레드들 종료
-    mod_ready = 0;
     //file_chk_work스레드 종료
     mutex_unlock(&file_chk_work_lock);
     kthread_stop(file_chk_work_thread);
