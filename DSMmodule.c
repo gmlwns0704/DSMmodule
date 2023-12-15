@@ -150,7 +150,7 @@ static struct timespec64 last_modified;
 //타이머
 static struct timer_list file_chk_timer;
 extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data jiffies;
-DEFINE_SPINLOCK(list_lock);
+DEFINE_SPINLOCK(list_lock); //해당 락은 타이머 인터럽트에서도 사용되므로 반드시 spinlock을 써야함(mutex쓰면 고장남)
 //DSM mappage파일을 위한 a_ops
 extern const struct address_space_operations shmem_aops; //원본 shmem_aops
 static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
@@ -466,6 +466,12 @@ static int dsm_srv(int port){
     ret = my_sock->ops->bind(my_sock, (struct sockaddr*)&my_addr, sizeof(my_addr));
     if(ret){
         printk("bind failed %d\n", ret);
+        return ret;
+    }
+
+    ret = my_sock->ops->accept(my_sock, peer_sock, 0, 1);
+    if(ret){
+        printk("accept failed\n");
         return ret;
     }
     return 0;
@@ -924,7 +930,7 @@ static int __init dsm_init(void)
         printk("kthread_tun failed\n");
         goto failed;
     }
-    printk("DSM init recv_thread done\n");
+    printk("DSM init rinitreecv_thread done\n");
 
     printk("DSM init done\n");
     mod_ready = 1;
