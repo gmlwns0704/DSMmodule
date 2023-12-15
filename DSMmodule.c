@@ -380,7 +380,6 @@ static void dsm_file_chk(struct timer_list *timer){
         return;
     }
     node = head;
-    printk("dsm_file_chk timer callback interrupt worked\n");
     while(node){
         //버퍼가 가득차면 스킵
         if(update_list_num >= UPDATE_BUF_NUM)
