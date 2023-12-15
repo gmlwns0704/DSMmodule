@@ -140,7 +140,6 @@ static struct sockaddr_in peer_addr;
 static struct socket* my_sock = NULL;
 static struct socket* peer_sock = NULL;
 static struct task_struct* recv_thread = NULL;
-DEFINE_SPINLOCK(recv_msg_lock);
 //args
 char* dsm_ip_addr;
 int dsm_port;
@@ -380,8 +379,6 @@ static void dsm_file_chk(struct timer_list *timer){
 static long int dsm_ioctl(struct file* fp, unsigned int cmd, unsigned long arg){
 
     int ret;
-    // struct file* pgfp;
-    // struct path path;
     struct DSMpg dsmpg;
     struct DSMpg_info* node;
 
@@ -594,8 +591,6 @@ static int dsm_recv_thread(void* arg){
     while(mod_ready){
         iv.iov_base = &header;
         iv.iov_len = sizeof(header);
-        //critical start
-        spin_lock(&recv_msg_lock);
         kernel_recvmsg(peer_sock, &msg, &iv, 1, iv.iov_len, 0);
         printk("handle msg id:%d, type:%d, sz:%d\n", header.id, header.type, header.sz);
         switch(header.type){
@@ -647,8 +642,6 @@ static int dsm_recv_thread(void* arg){
                 printk("unknown msg type\n");
             break;
         }
-        //critical end
-        spin_unlock(&recv_msg_lock);
     }
 
     return -1;
