@@ -469,6 +469,13 @@ static int dsm_srv(int port){
         return ret;
     }
 
+    printk("dsm_srv try listen\n");
+    ret = my_sock->ops->listen(my_sock, 5);
+    if(ret){
+        printk("listen failed %d\n", ret);
+        return ret;
+    }
+
     printk("dsm_srv try sock_create (peer)\n");
 	ret = sock_create(AF_INET, SOCK_STREAM, 0, &peer_sock);
 	if (ret){
@@ -476,11 +483,13 @@ static int dsm_srv(int port){
         return ret;
     }
 
-    ret = my_sock->ops->accept(my_sock, peer_sock, 0, 1);
+    printk("dsm_srv try accept(%p, %p, 0, true)\n", my_sock, peer_sock);
+    ret = my_sock->ops->accept(my_sock, peer_sock, 0, true);
     if(ret){
-        printk("accept failed\n");
+        printk("accept failed %d\n", ret);
         return ret;
     }
+    
     return 0;
 }
 
