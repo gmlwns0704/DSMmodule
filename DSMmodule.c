@@ -191,7 +191,7 @@ static struct DSMpg_info* list_find(int input_id){
 
 static struct DSMpg_info* list_find_by_inode(const struct inode* inode){
     struct DSMpg_info* node = head;
-    mutex_lock(&list_lcok);
+    mutex_lock(&list_lock);
     if(!head || head->inode == inode)
         return head;
     while(node->next && node->next->inode != inode)
