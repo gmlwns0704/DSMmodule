@@ -42,8 +42,10 @@ int main(int argc, char** argv){
     while(1){
         printf("(w:write, r:read, e:end): ");
         scanf("%c\n", &c);
-        if(c == 'w')
+        if(c == 'w'){
+            printf("input value: ");
             scanf("%d\n", (int*)ptr);
+        }
         else if(c == 'r')
             printf("ptr: %d\n", *((int*)ptr));
         else if(c == 'e')
