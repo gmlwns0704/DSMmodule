@@ -924,7 +924,7 @@ static vm_fault_t dsm_fault(struct vm_fault* vmf){
     dsmpg = list_find_by_inode(vmf->vma->vm_file->f_inode);
     printk("custom dsm_fault occured\n");
     if(dsmpg)
-        dsm_msg_update_pg(dsmpg);
+        dsm_msg_sync_pg(dsmpg->id);
     else
         printk("dsm_fault occured but inode is invalid\n");
     return orig_ret;
