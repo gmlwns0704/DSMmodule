@@ -146,7 +146,6 @@ static struct task_struct* recv_thread = NULL;
 static struct task_struct* file_chk_work_thread = NULL;
 //args
 char* dsm_ip_addr;
-char* dsm_dir;
 int dsm_port;
 //페이지 정보 링크드 리스트
 static struct DSMpg_info* head = NULL;
@@ -178,7 +177,6 @@ struct vm_operations_struct dsm_shmem_vm_ops;
 //arguments
 //charp: char*
 module_param(dsm_ip_addr, charp, 0600);
-module_param(dsm_dir, charp, 0600);
 module_param(dsm_port, int, 0600);
 
 //페이지 정보 링크드 리스트
@@ -299,7 +297,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     int ret, is_new;
     char buf[32];
 
-    sprintf(buf, "%s/DSM%d", dsm_dir, dsmpg->dsmpg_id);
+    sprintf(buf, DSM_DEF_DIR"DSM%d", dsmpg->dsmpg_id);
 
     node = list_find(dsmpg->dsmpg_id);
     is_new = !node;
@@ -353,7 +351,7 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
     struct file* fp;
     char buf[32];
     struct DSMpg_info* ret;
-    sprintf(buf, "%s/DSM%d", dsm_dir, id);
+    sprintf(buf, DSM_DEF_DIR"DSM%d", id);
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(IS_ERR(fp)){
         printk("filp_open failed\n");
@@ -370,15 +368,12 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 }
 
 // mapfile_check
-#define NO_TIMER
+
 // 타이머 인터럽트로 인해 호출됨, sleep, lock, kvmalloc등 sleep을 야기하는 기능은 금지됨
 static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
     struct timespec64* target_modified;
     struct timespec64* target_last_modified;
-    #ifdef NO_TIMER
-    return;
-    #endif
     //lock상태라면 스킵
     if(spin_is_locked(&list_lock)){
         mod_timer(&file_chk_timer, jiffies + msecs_to_jiffies(100));
@@ -703,7 +698,7 @@ static int dsm_msg_update_pg(struct DSMpg_info* dsmpg){
     offset += sizeof(struct msg_header);
 
     //업데이트할 파일 열기
-    sprintf(buf, "%s/DSM%d", dsm_dir, dsmpg->id);
+    sprintf(buf, DSM_DEF_DIR"DSM%d", dsmpg->id);
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(!fp){
         printk("filp_open failed\n");
@@ -802,7 +797,7 @@ static int dsm_msg_handle_new_pg(int id, unsigned int sz){
         printk("dms_msg_handle_new_pg id already exist %d\n", id);
         return -1;
     }
-    sprintf(buf, "%s/DSM%d", dsm_dir, id);
+    sprintf(buf, DSM_DEF_DIR"DSM%d", id);
     dsmpg = new_map_file(id, sz);
     if(!dsmpg){
         printk("new_map_file failed\n");
@@ -817,7 +812,7 @@ static int dsm_msg_handle_update_pg(struct DSMpg_info* dsmpg, void* data){
     char buf[64];
 
     //업데이트할 파일 열기
-    sprintf(buf, "%s/DSM%d", dsm_dir, dsmpg->id);
+    sprintf(buf, DSM_DEF_DIR"DSM%d", dsmpg->id);
     fp = filp_open(buf, O_CREAT|O_RDWR, 0600);
     if(IS_ERR(fp)){
         printk("filp_open failed\n");
