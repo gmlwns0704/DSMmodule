@@ -335,7 +335,7 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
     }
 
     printk("setting custom dsm_fops to fp 0x%p 0x%p 0x%p\n",
-    fp->f_mapping=>a_ops->writepage,
+    fp->f_mapping->a_ops->writepage,
     dsm_shmem_aops.writepage,
     dsm_shmem_writepage);
     //address_space의 a_ops를 커스텀 aops로 설정
