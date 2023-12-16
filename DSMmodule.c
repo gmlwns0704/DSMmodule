@@ -370,7 +370,7 @@ static struct DSMpg_info* new_map_file(int id, unsigned int sz){
 }
 
 // mapfile_check
-
+#define NO_TIMER
 // 타이머 인터럽트로 인해 호출됨, sleep, lock, kvmalloc등 sleep을 야기하는 기능은 금지됨
 static void dsm_file_chk(struct timer_list *timer){
     struct DSMpg_info* node;
