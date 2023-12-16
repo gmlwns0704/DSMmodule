@@ -160,8 +160,8 @@ DEFINE_MUTEX(file_chk_work_lock); //해당 락은 타이머 인터럽트에 의�
 static struct DSMpg_info* update_list[UPDATE_BUF_NUM]; //타이머 인터럽트에서 update대상 노드들을 추가하면 work스레드에서 실제 업데이트 수행
 static int update_list_num = 0;
 //DSM mappage파일을 위한 a_ops
-extern const struct address_space_operations shmem_aops; //원본 shmem_aops
-static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
+// extern const struct address_space_operations shmem_aops; //원본 shmem_aops
+// static struct address_space_operations dsm_shmem_aops; //dsm을 위한 커스텀 aops, init과정에서 별도 수정 필요
 //mm/shmem.c shmem_file_operations 포인터, static이므로 포인터를 통한 참조
 DEFINE_SPINLOCK(shmem_file_operations_lock);
 struct file_operations* shmem_file_operations_ptr = NULL;
@@ -331,18 +331,15 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
             memcpy(&dsm_shmem_file_operations, shmem_file_operations_ptr, sizeof(*shmem_file_operations_ptr));
             //fault함수 설정
             dsm_shmem_file_operations.mmap = dsm_mmap;
+            dsm_shmem_file_operations.fsync = dsm_fsync;
         }
         spin_unlock(&shmem_file_operations_lock);
     }
 
     //address_space의 a_ops를 커스텀 aops로 설정
-    fp->f_mapping->a_ops = &dsm_shmem_aops;
+    // fp->f_mapping->a_ops = &dsm_shmem_aops;
     //fp->_fops을 dsm_fops로 변경
     fp->f_op = &dsm_shmem_file_operations;
-    printk("check setting dsm_fops for fp worked well 0x%p 0x%p 0x%p\n",
-    fp->f_mapping->a_ops->writepage,
-    dsm_shmem_aops.writepage,
-    dsm_shmem_writepage);
 
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
@@ -855,24 +852,24 @@ static int dsm_msg_handle_sync_pg(int id, struct timespec64* tm){
 
 //address spcae aops
 //주로 fsync로 호출됨
-static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc){
-    struct folio *folio = page_folio(page);
-	struct address_space *mapping = folio->mapping;
-    struct inode *inode = mapping->host;
-    struct DSMpg_info* dsmpg;
-    /*
-    DSMpg_info의 linked list를 조회하며 inode에 해당하는 파일의 노드 구하기
-    해당 노드의 정보로 dsm_msg_update_pg 수행
-    */
-    printk("dsm_shmem_writepage occured\n");
-    dsmpg = list_find_by_inode(inode);
-    printk("found dsmpg %d\n", dsmpg->id);
-    if(dsmpg){
-        if(dsm_msg_update_pg(dsmpg))
-            printk("from dsm_shmem_writepage, dsm_msg_update_pg failed\n");
-    }
-    return shmem_aops.writepage(page, wbc);
-}
+// static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc){
+//     struct folio *folio = page_folio(page);
+// 	struct address_space *mapping = folio->mapping;
+//     struct inode *inode = mapping->host;
+//     struct DSMpg_info* dsmpg;
+//     /*
+//     DSMpg_info의 linked list를 조회하며 inode에 해당하는 파일의 노드 구하기
+//     해당 노드의 정보로 dsm_msg_update_pg 수행
+//     */
+//     printk("dsm_shmem_writepage occured\n");
+//     dsmpg = list_find_by_inode(inode);
+//     printk("found dsmpg %d\n", dsmpg->id);
+//     if(dsmpg){
+//         if(dsm_msg_update_pg(dsmpg))
+//             printk("from dsm_shmem_writepage, dsm_msg_update_pg failed\n");
+//     }
+//     return shmem_aops.writepage(page, wbc);
+// }
 
 //vma vops
 
@@ -899,6 +896,18 @@ static int dsm_mmap(struct file* fp, struct vm_area_struct* vma){
     //write금지, fault를 강제함
     // vma->vm_flags &= ~VM_WRITE;
     return shmem_file_operations_ptr->mmap(fp, vma);
+}
+
+static int dsm_fsync(struct file * fp, loff_t start, loff_t end, int datasync){
+    struct DSMpg_info* dsmpg;
+
+    dsmpg = list_find_by_inode(fp->f_inode);
+    if(!dsmpg)
+        return -1;
+    
+    printk("fsync occured for id %d\n", dsmpg->id);
+    dsm_msg_update_pg(dsmpg);
+    return 0;
 }
 
 static vm_fault_t dsm_fault(struct vm_fault* vmf){
@@ -951,9 +960,9 @@ static int __init dsm_init(void)
     dv_dst = cl_dst = cdv_dst = ureg = 0;
 
     //dsm_shmem_aops 설정
-    printk("set dsm_shmem_aops\n");
-    dsm_shmem_aops = shmem_aops;
-    dsm_shmem_aops.writepage = dsm_shmem_writepage;
+    // printk("set dsm_shmem_aops\n");
+    // dsm_shmem_aops = shmem_aops;
+    // dsm_shmem_aops.writepage = dsm_shmem_writepage;
 
     //dsm_shmem_fops, dsm_vm_ops 설정, shmem_file_operations, shmem_vm_ops의 포인터를 얻고 memcpy해야함
 
