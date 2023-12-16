@@ -128,6 +128,7 @@ static int dsm_msg_handle_sync_pg(int id, struct timespec64* tm);
 static int dsm_shmem_writepage(struct page *page, struct writeback_control *wbc);
 static vm_fault_t dsm_fault(struct vm_fault* vmf);
 static int dsm_mmap(struct file* fp, struct vm_area_struct* vma);
+static int dsm_fsync(struct file * fp, loff_t start, loff_t end, int datasync);
 // static int dsm_access_phys(struct vm_area_struct* vma, unsigned long addr, void* buf, int len, int write);
 
 static void dsm_exit_protocol(void);
