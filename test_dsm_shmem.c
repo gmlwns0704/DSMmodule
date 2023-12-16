@@ -49,13 +49,15 @@ int main(int argc, char** argv){
         else if(c == 'r')
             printf("ptr: %d\n", *((int*)ptr));
         else if(c == 's')
-            msync(dsmpg.dsmpg_fd);
+            msync(dsmpg.dsmpg_fd, 4096, MS_SYNC);
         else if(c == 'e')
             break;
     }
     // printf("start force update\n");
     // if(ioctl(mod, DSM_IOCTL_FORCE_UPDATE, &dsmpg) < 0)
     //     perror("ioctl");
+    printf("start munmap\n");
+    munmap(ptr, 4096);
     printf("start close\n");
     close(dsmpg.dsmpg_fd);
     close(mod);
