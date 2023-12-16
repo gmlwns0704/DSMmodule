@@ -40,7 +40,7 @@ int main(int argc, char** argv){
     printf("print ptr: %p\n", ptr);
     char c;
     while(1){
-        printf("(w:write, r:read, e:end): ");
+        printf("(w:write, r:read, s:sync, e:end): ");
         scanf("%c", &c);
         if(c == 'w'){
             printf("input value: ");
@@ -48,6 +48,8 @@ int main(int argc, char** argv){
         }
         else if(c == 'r')
             printf("ptr: %d\n", *((int*)ptr));
+        else if(c == 's')
+            fsync(dsmpg.dsmpg_fd);
         else if(c == 'e')
             break;
     }
