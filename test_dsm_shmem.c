@@ -49,7 +49,7 @@ int main(int argc, char** argv){
         else if(c == 'r')
             printf("ptr: %d\n", *((int*)ptr));
         else if(c == 's')
-            fsync(dsmpg.dsmpg_fd);
+            msync(dsmpg.dsmpg_fd);
         else if(c == 'e')
             break;
     }
