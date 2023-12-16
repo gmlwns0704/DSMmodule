@@ -335,14 +335,14 @@ static int new_map_fd_install(struct DSMpg* dsmpg){
         spin_unlock(&shmem_file_operations_lock);
     }
 
-    printk("setting custom dsm_fops to fp 0x%p 0x%p 0x%p\n",
-    fp->f_mapping->a_ops->writepage,
-    dsm_shmem_aops.writepage,
-    dsm_shmem_writepage);
     //address_space의 a_ops를 커스텀 aops로 설정
     fp->f_mapping->a_ops = &dsm_shmem_aops;
     //fp->_fops을 dsm_fops로 변경
     fp->f_op = &dsm_shmem_file_operations;
+    printk("check setting dsm_fops for fp worked well 0x%p 0x%p 0x%p\n",
+    fp->f_mapping->a_ops->writepage,
+    dsm_shmem_aops.writepage,
+    dsm_shmem_writepage);
 
     //유저에게 fd설정
     dsmpg->dsmpg_fd = get_unused_fd_flags(O_CLOEXEC);
